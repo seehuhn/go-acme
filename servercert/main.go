@@ -20,10 +20,56 @@ import (
 	"flag"
 	"fmt"
 	"log"
+	"strings"
 	"time"
+	"unicode/utf8"
 
 	"seehuhn.de/go/acme/cert"
 )
+
+type table struct {
+	header []string
+	rows   [][]string
+}
+
+func (T *table) SetHeader(names ...string) {
+	T.header = names
+}
+
+func (T *table) AddRow(row ...string) {
+	T.rows = append(T.rows, row)
+}
+
+func (T *table) Show() {
+	ww := make([]int, len(T.header))
+	for i, name := range T.header {
+		ww[i] = utf8.RuneCountInString(name)
+	}
+	for _, row := range T.rows {
+		for i, text := range row {
+			w := utf8.RuneCountInString(text)
+			if w > ww[i] {
+				ww[i] = w
+			}
+		}
+	}
+
+	parts := make([]string, len(ww))
+	for i, text := range T.header {
+		parts[i] = fmt.Sprintf("%-*s", ww[i], text)
+	}
+	fmt.Println(strings.Join(parts, " | "))
+	for i, w := range ww {
+		parts[i] = strings.Repeat("-", w)
+	}
+	fmt.Println(strings.Join(parts, "-+-"))
+	for _, row := range T.rows {
+		for i, text := range row {
+			parts[i] = fmt.Sprintf("%-*s", ww[i], text)
+		}
+		fmt.Println(strings.Join(parts, " | "))
+	}
+}
 
 // List prints a table with information about all known certificates to stdout.
 func List(m *cert.Manager) error {
@@ -32,8 +78,8 @@ func List(m *cert.Manager) error {
 		return err
 	}
 
-	fmt.Println("domain               | valid | expiry time  | comment")
-	fmt.Println("---------------------+-------+--------------+--------------")
+	T := &table{}
+	T.SetHeader("domain", "valid", "expiry time", "comment")
 	for _, info := range infos {
 		var tStr string
 		if !info.Expiry.IsZero() {
@@ -46,9 +92,9 @@ func List(m *cert.Manager) error {
 				tStr = dt.Round(time.Second).String()
 			}
 		}
-		fmt.Printf("%-20s | %-5t | %-12s | %s\n", info.Domain, info.IsValid,
-			tStr, info.Message)
+		T.AddRow(info.Domain, fmt.Sprint(info.IsValid), tStr, info.Message)
 	}
+	T.Show()
 	return nil
 }
 
