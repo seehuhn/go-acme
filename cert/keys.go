@@ -31,9 +31,9 @@ import (
 	"time"
 )
 
-// getPrivateKey loads the account key from disk, or generates
+// loadOrCreatePrivateKey loads the account key from disk, or generates
 // a new key if no existing key is found.
-func getPrivateKey(fname string) (crypto.Signer, error) {
+func loadOrCreatePrivateKey(fname string) (crypto.Signer, error) {
 	key, err := loadPrivateKey(fname)
 	if os.IsNotExist(err) {
 		var ecKey *ecdsa.PrivateKey
@@ -98,16 +98,37 @@ func getDERCert(fname, domain string, privKey crypto.Signer) ([]byte, error) {
 }
 
 func loadCert(fname string) ([]byte, error) {
-	// TODO(voss): return an error if the key is world-readable
+	chain, err := loadCertChain(fname)
+	if err != nil {
+		return nil, err
+	}
+	return chain[0], nil
+}
+
+func loadCertChain(fname string) ([][]byte, error) {
 	data, err := ioutil.ReadFile(fname)
 	if err != nil {
 		return nil, err
 	}
-	certDER, _ := pem.Decode(data)
-	if certDER == nil || !strings.Contains(certDER.Type, "CERTIFICATE") {
-		return nil, errInvalidCertificate
+
+	errInvalid := &FileError{
+		FileName: fname,
+		Problem:  "not a certificate in PEM encoding",
 	}
-	return certDER.Bytes, nil
+
+	var chain [][]byte
+	for len(data) > 0 {
+		var certDER *pem.Block
+		certDER, data = pem.Decode(data)
+		if certDER == nil || !strings.Contains(certDER.Type, "CERTIFICATE") {
+			return nil, errInvalid
+		}
+		chain = append(chain, certDER.Bytes)
+	}
+	if len(chain) == 0 {
+		return nil, errInvalid
+	}
+	return chain, nil
 }
 
 var maxSerial *big.Int

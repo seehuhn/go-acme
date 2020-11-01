@@ -26,13 +26,23 @@ import (
 	"os"
 )
 
-func checkDir(dirName string) error {
+func isDir(dirName string) error {
 	stat, err := os.Stat(dirName)
-	if os.IsNotExist(err) {
-		err = os.MkdirAll(dirName, 0700)
+	if err != nil {
+		return err
 	}
-	if err == nil && !stat.IsDir() {
-		err = errDirectory
+	if !stat.IsDir() {
+		return &FileError{FileName: dirName, Problem: "not a directory"}
+	}
+	return nil
+}
+
+// Make sure dirName exists and is a directory.  Create a new directory if
+// needed.
+func createDirIfNeeded(dirName string, perm os.FileMode) error {
+	err := isDir(dirName)
+	if os.IsNotExist(err) {
+		return os.MkdirAll(dirName, perm)
 	}
 	return err
 }

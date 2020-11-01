@@ -39,198 +39,295 @@ import (
 // Manager holds all state required to generate and/or renew certificates
 // via Let's Encrypt.
 type Manager struct {
-	config        *Config
-	client        *acme.Client
-	needsRenewing []int
-	siteKeys      map[int]crypto.Signer
+	directory string
+	config    *Config
+	roots     *x509.CertPool
 
-	webPathTmpl  *template.Template
-	certPathTmpl *template.Template
+	accountKey crypto.Signer
+	siteKeys   map[int]crypto.Signer
+
+	webPathTmpl *template.Template
 }
 
-// NewManager creates a new certificate manager.  This sets up a
-// new account with Let's Encrypt, if no previous account is found.
-func NewManager(ctx context.Context, config *Config) (*Manager, error) {
-	m := &Manager{
-		config:   config,
-		siteKeys: make(map[int]crypto.Signer),
-	}
-
-	needsRenewing, err := m.verifySites()
-	if err != nil || len(needsRenewing) == 0 {
-		return nil, err
-	}
-	m.needsRenewing = needsRenewing
-
-	// this sets m.client
-	err = m.verifyAccount(ctx)
+// NewManager creates a new certificate manager.
+func NewManager(config *Config, debug bool) (*Manager, error) {
+	err := createDirIfNeeded(config.AccountDir, 0700)
 	if err != nil {
 		return nil, err
 	}
 
-	return m, nil
+	keyName := filepath.Join(config.AccountDir, "account.key")
+	accountKey, err := loadOrCreatePrivateKey(keyName)
+	if err != nil {
+		return nil, err
+	}
+
+	roots, err := x509.SystemCertPool()
+	if err != nil {
+		return nil, err
+	}
+
+	directory := defaultACMEDirectory
+	if debug {
+		directory = debugACMEDirectory
+		roots.AppendCertsFromPEM([]byte(fakeRootCert))
+	}
+
+	return &Manager{
+		directory:  directory,
+		config:     config,
+		roots:      roots,
+		accountKey: accountKey,
+		siteKeys:   make(map[int]crypto.Signer),
+	}, nil
+}
+
+// Info contains information about a single certificate installed on the
+// system.
+type Info struct {
+	Domain    string
+	IsValid   bool
+	IsMissing bool
+	Expiry    time.Time
+	Message   string
+}
+
+// GetCertInfo returns information about all certificates managed by `m`.
+func (m *Manager) GetCertInfo() ([]*Info, error) {
+	n := len(m.config.Sites)
+	res := make([]*Info, n)
+	now := time.Now()
+	for i := 0; i < n; i++ {
+		certFileName, err := m.config.GetCertFileName(i)
+		if err != nil {
+			return nil, err
+		}
+		chainDER, err := loadCertChain(certFileName)
+		if err != nil && !os.IsNotExist(err) {
+			return nil, err
+		}
+
+		info, err := m.checkCert(now, chainDER, i)
+		if err != nil {
+			return nil, err
+		}
+		res[i] = info
+	}
+	return res, nil
+}
+
+func (m *Manager) checkCert(now time.Time, chainDER [][]byte, i int) (*Info, error) {
+	domain := m.config.Sites[i].Domain
+	info := &Info{
+		Domain: domain,
+	}
+
+	if chainDER == nil {
+		info.IsMissing = true
+		info.Message = "missing"
+		return info, nil
+	}
+
+	siteCertDER := chainDER[0]
+	siteCert, err := x509.ParseCertificate(siteCertDER)
+	if err != nil {
+		return nil, err
+	}
+	if now.Before(siteCert.NotBefore) {
+		info.Message = "not valid until " + siteCert.NotBefore.String()
+		return info, nil
+	}
+	info.Expiry = siteCert.NotAfter
+	if now.After(siteCert.NotAfter) {
+		info.Message = "expired on " + siteCert.NotAfter.String()
+		return info, nil
+	}
+
+	// Ensure the siteCert corresponds to the correct private key.
+	key, err := m.getKey(i)
+	if err != nil {
+		return nil, err
+	}
+	switch pub := siteCert.PublicKey.(type) {
+	case *rsa.PublicKey:
+		prv, ok := key.(*rsa.PrivateKey)
+		if !ok || pub.N.Cmp(prv.N) != 0 {
+			info.Expiry = time.Time{}
+			info.Message = "public key doesn't match private key"
+			return info, nil
+		}
+	case *ecdsa.PublicKey:
+		prv, ok := key.(*ecdsa.PrivateKey)
+		if !ok || pub.X.Cmp(prv.X) != 0 || pub.Y.Cmp(prv.Y) != 0 {
+			info.Expiry = time.Time{}
+			info.Message = "public key doesn't match private key"
+			return info, nil
+		}
+	default:
+		return nil, errUnknownKeyType
+	}
+
+	intermediates := x509.NewCertPool()
+	for _, caCertDER := range chainDER[1:] {
+		caCert, err := x509.ParseCertificate(caCertDER)
+		if err != nil {
+			return nil, err
+		}
+		intermediates.AddCert(caCert)
+	}
+	opts := x509.VerifyOptions{
+		DNSName:       domain,
+		Roots:         m.roots,
+		Intermediates: intermediates,
+		CurrentTime:   now,
+	}
+	_, err = siteCert.Verify(opts)
+	if err != nil {
+		info.Message = err.Error()
+		return info, nil
+	}
+
+	info.IsValid = true
+	info.Message = "issued by " + siteCert.Issuer.String()
+
+	return info, nil
+}
+
+// InstallDummyCert installs a self-signed dummy certificate for
+// site number `i`.
+func (m *Manager) InstallDummyCert(i int, expiry time.Duration) error {
+	now := time.Now()
+	domain := m.config.Sites[i].Domain
+	fname, err := m.config.GetCertFileName(i)
+	privKey, err := m.getKey(i)
+	if err != nil {
+		return err
+	}
+
+	tmpl := &x509.Certificate{
+		Subject:      pkix.Name{CommonName: domain},
+		SerialNumber: newSerialNum(),
+		NotBefore:    now,
+		NotAfter:     now.Add(expiry),
+		DNSNames:     []string{domain},
+		KeyUsage: x509.KeyUsageKeyEncipherment |
+			x509.KeyUsageDigitalSignature,
+		ExtKeyUsage: []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
+	}
+	caCertDER, err := x509.CreateCertificate(rand.Reader, tmpl, tmpl,
+		privKey.Public(), privKey)
+	if err != nil {
+		return err
+	}
+	return writePEM(fname, [][]byte{caCertDER}, "CERTIFICATE", 0644)
+}
+
+func (m *Manager) getKey(i int) (crypto.Signer, error) {
+	if key, ok := m.siteKeys[i]; ok {
+		return key, nil
+	}
+
+	keyPath, err := m.config.GetKeyFileName(i)
+	if err != nil {
+		return nil, err
+	}
+
+	key, err := loadOrCreatePrivateKey(keyPath)
+	if err != nil {
+		return nil, err
+	}
+
+	m.siteKeys[i] = key
+	return key, nil
 }
 
 // verifyAccount loads or creates the private key for the account and registers
 // the account with Let's Encrypt if needed. The function sets the m.client
 // field.
-func (m *Manager) verifyAccount(ctx context.Context) error {
-	err := checkDir(m.config.AccountDir)
-	if err != nil {
-		return err
-	}
-
-	keyName := filepath.Join(m.config.AccountDir, "account.pem")
-	accountKey, err := getPrivateKey(keyName)
-	if err != nil {
-		return err
-	}
-	m.client = &acme.Client{
-		DirectoryURL: m.config.ACMEDirectory,
+func (m *Manager) verifyAccount(ctx context.Context) (*acme.Client, error) {
+	client := &acme.Client{
+		DirectoryURL: m.directory,
 		UserAgent:    packageVersion,
-		Key:          accountKey,
+		Key:          m.accountKey,
 	}
 	acct := &acme.Account{
 		Contact: []string{"mailto:" + m.config.ContactEmail},
 	}
-	_, err = m.client.Register(ctx, acct, acme.AcceptTOS)
+	_, err := client.Register(ctx, acct, acme.AcceptTOS)
 	if err != nil && err != acme.ErrAccountAlreadyExists {
+		return nil, err
+	}
+	return client, nil
+}
+
+// RenewCertificate requests and installs a new certificate for the given site.
+func (m *Manager) RenewCertificate(i int) error {
+	ctx := context.TODO()
+
+	// this sets m.client
+	client, err := m.verifyAccount(ctx)
+	if err != nil {
+		return err
+	}
+
+	now := time.Now()
+	site := m.config.Sites[i]
+	domain := site.Domain
+	order, err := client.AuthorizeOrder(ctx, acme.DomainIDs(domain))
+	if err != nil {
+		return err
+	}
+	order, err = m.finishAuthorization(ctx, client, order, site)
+	if err != nil {
+		return err
+	}
+
+	req := &x509.CertificateRequest{
+		Subject:  pkix.Name{CommonName: site.Domain},
+		DNSNames: []string{},
+		// ExtraExtensions: ext,
+	}
+	key, err := m.getKey(i)
+	if err != nil {
+		return err
+	}
+	csr, err := x509.CreateCertificateRequest(rand.Reader, req, key)
+	if err != nil {
+		return err
+	}
+	chainDER, _, err := client.CreateOrderCert(ctx, order.FinalizeURL, csr, true)
+	if err != nil {
+		return err
+	}
+	info, err := m.checkCert(now, chainDER, i)
+	if err != nil {
+		return err
+	}
+	if !info.IsValid {
+		return errors.New("received invalid certificate: " + info.Message)
+	}
+
+	certPath, err := m.config.GetCertFileName(i)
+	if err != nil {
+		return err
+	}
+	fmt.Println("writing", certPath)
+	err = writePEM(certPath, chainDER, "CERTIFICATE", 0644)
+	if err != nil {
 		return err
 	}
 	return nil
 }
 
-// verifySites sets up the key directories for all sites and returns
-// a list of sites which need new certificates.
-//
-// This function also fills in m.siteKeys .
-func (m *Manager) verifySites() ([]int, error) {
-	keyPathTmpl := template.New("keyPath")
-	keyPathTmpl = template.Must(keyPathTmpl.Parse(m.config.DefaultSiteKey))
-	certPathTmpl := template.New("certPath")
-	certPathTmpl = template.Must(certPathTmpl.Parse(m.config.DefaultSiteCert))
-
-	now := time.Now()
-	deadline := now.Add(7 * 24 * time.Hour)
-	var needsRenewing []int
-	for i, site := range m.config.Sites {
-		keyPath := site.KeyPath
-		if keyPath == "" {
-			buf := &strings.Builder{}
-			err := keyPathTmpl.Execute(buf, map[string]interface{}{
-				"Config": m.config,
-				"Site":   site,
-			})
-			if err != nil {
-				return nil, err
-			}
-			keyPath = buf.String()
-		}
-
-		key, err := getPrivateKey(keyPath)
-		if err != nil {
-			return nil, err
-		}
-
-		certPath := site.CertPath
-		if certPath == "" {
-			buf := &strings.Builder{}
-			err := certPathTmpl.Execute(buf, map[string]interface{}{
-				"Config": m.config,
-				"Site":   site,
-			})
-			if err != nil {
-				return nil, err
-			}
-			certPath = buf.String()
-		}
-
-		cert, err := getDERCert(certPath, site.Domain, key)
-		if err != nil {
-			return nil, err
-		}
-		cl, err := x509.ParseCertificate(cert)
-		if err != nil {
-			return nil, err
-		}
-
-		if cl.NotBefore.After(now) || cl.NotAfter.Before(deadline) {
-			needsRenewing = append(needsRenewing, i)
-			m.siteKeys[i] = key
-		}
-	}
-	return needsRenewing, nil
-}
-
-// RenewAll renews all certificates
-func (m *Manager) RenewAll(ctx context.Context) error {
-	client := m.client
-	now := time.Now()
-	for _, i := range m.needsRenewing {
-		site := m.config.Sites[i]
-		domain := site.Domain
-		order, err := client.AuthorizeOrder(ctx, acme.DomainIDs(domain))
-		if err != nil {
-			return err
-		}
-		order, err = m.finishAuthorization(ctx, order, site)
-		if err != nil {
-			return err
-		}
-
-		req := &x509.CertificateRequest{
-			Subject:  pkix.Name{CommonName: site.Domain},
-			DNSNames: []string{},
-			// ExtraExtensions: ext,
-		}
-		key := m.siteKeys[i]
-		csr, err := x509.CreateCertificateRequest(rand.Reader, req, key)
-		if err != nil {
-			return err
-		}
-		chainDER, _, err := client.CreateOrderCert(ctx, order.FinalizeURL, csr, true)
-		if err != nil {
-			return err
-		}
-		err = validateCert(chainDER, site.Domain, key, now)
-		if err != nil {
-			return err
-		}
-
-		certPath := site.CertPath
-		if certPath == "" {
-			if m.certPathTmpl == nil {
-				m.certPathTmpl = template.New("certPath")
-				m.certPathTmpl = template.Must(m.certPathTmpl.Parse(m.config.DefaultSiteCert))
-			}
-
-			buf := &strings.Builder{}
-			err := m.certPathTmpl.Execute(buf, map[string]interface{}{
-				"Config": m.config,
-				"Site":   site,
-			})
-			if err != nil {
-				return err
-			}
-			certPath = buf.String()
-		}
-		fmt.Println("writing", certPath)
-		err = writePEM(certPath, chainDER, "CERTIFICATE", 0644)
-		if err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-func (m *Manager) finishAuthorization(ctx context.Context, order *acme.Order, site *SiteConfig) (*acme.Order, error) {
+func (m *Manager) finishAuthorization(ctx context.Context, client *acme.Client,
+	order *acme.Order, site *ConfigSite) (*acme.Order, error) {
 	if order.Status == acme.StatusReady {
-		fmt.Println(site.Domain, "already authorized")
+		// fmt.Println(site.Domain, "already authorized")
 		return order, nil
 	}
-	fmt.Println(site.Domain, "needs authorization")
+	// fmt.Println(site.Domain, "needs authorization")
 	for _, zurl := range order.AuthzURLs {
-		z, err := m.client.GetAuthorization(ctx, zurl)
+		z, err := client.GetAuthorization(ctx, zurl)
 		if err != nil {
 			return nil, err
 		}
@@ -249,7 +346,7 @@ func (m *Manager) finishAuthorization(ctx context.Context, order *acme.Order, si
 			return nil, errNoChallenge
 		}
 
-		resp, err := m.client.HTTP01ChallengeResponse(challenge.Token)
+		resp, err := client.HTTP01ChallengeResponse(challenge.Token)
 		if err != nil {
 			return nil, err
 		}
@@ -271,75 +368,20 @@ func (m *Manager) finishAuthorization(ctx context.Context, order *acme.Order, si
 			}
 			webPath = buf.String()
 		}
-		webPath = webPath + m.client.HTTP01ChallengePath(challenge.Token)
+		webPath = webPath + client.HTTP01ChallengePath(challenge.Token)
 		os.MkdirAll(filepath.Dir(webPath), 0755)
 		ioutil.WriteFile(webPath, []byte(resp), 0644)
 
-		_, err = m.client.Accept(ctx, challenge)
+		_, err = client.Accept(ctx, challenge)
 		if err != nil {
 			return nil, err
 		}
 
-		_, err = m.client.WaitAuthorization(ctx, z.URI)
+		_, err = client.WaitAuthorization(ctx, z.URI)
 		if err != nil {
 			return nil, err
 		}
 	}
 	fmt.Println("success")
-	return m.client.WaitOrder(ctx, order.URI)
-}
-
-// validateCert parses a cert chain provided as der argument and verifies the leaf
-// and der[0] correspond to the private key, the domain and key type match, and
-// expiration dates are valid. It doesn't do any revocation checking.
-//
-// The returned value is the verified leaf cert.
-func validateCert(der [][]byte, domain string, key crypto.Signer, now time.Time) error {
-	// parse public part(s)
-	var n int
-	for _, b := range der {
-		n += len(b)
-	}
-	pub := make([]byte, n)
-	n = 0
-	for _, b := range der {
-		n += copy(pub[n:], b)
-	}
-	x509Cert, err := x509.ParseCertificates(pub)
-	if err != nil || len(x509Cert) == 0 {
-		return errors.New("acme/autocert: no public key found")
-	}
-	// verify the leaf is not expired and matches the domain name
-	leaf := x509Cert[0]
-	if now.Before(leaf.NotBefore) {
-		return errors.New("acme/autocert: certificate is not valid yet")
-	}
-	if now.After(leaf.NotAfter) {
-		return errors.New("acme/autocert: expired certificate")
-	}
-	if err := leaf.VerifyHostname(domain); err != nil {
-		return err
-	}
-	// ensure the leaf corresponds to the private key and matches the certKey type
-	switch pub := leaf.PublicKey.(type) {
-	case *rsa.PublicKey:
-		prv, ok := key.(*rsa.PrivateKey)
-		if !ok {
-			return errors.New("acme/autocert: private key type does not match public key type")
-		}
-		if pub.N.Cmp(prv.N) != 0 {
-			return errors.New("acme/autocert: private key does not match public key")
-		}
-	case *ecdsa.PublicKey:
-		prv, ok := key.(*ecdsa.PrivateKey)
-		if !ok {
-			return errors.New("acme/autocert: private key type does not match public key type")
-		}
-		if pub.X.Cmp(prv.X) != 0 || pub.Y.Cmp(prv.Y) != 0 {
-			return errors.New("acme/autocert: private key does not match public key")
-		}
-	default:
-		return errors.New("acme/autocert: unknown public key algorithm")
-	}
-	return nil
+	return client.WaitOrder(ctx, order.URI)
 }

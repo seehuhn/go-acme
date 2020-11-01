@@ -17,48 +17,105 @@
 package main
 
 import (
-	"context"
+	"flag"
 	"fmt"
 	"log"
-	"os"
+	"time"
 
 	"seehuhn.de/go/letsencrypt/cert"
 )
 
-// DefaultACMEDirectory is the default ACME Directory URL.
-const DefaultACMEDirectory = "https://acme-v02.api.letsencrypt.org/directory"
+// List prints a table with information about all known certificates to stdout.
+func List(m *cert.Manager) error {
+	infos, err := m.GetCertInfo()
+	if err != nil {
+		return err
+	}
 
-// DebugACMEDirectory is the ACME v2 Staging Directory URL.
-const DebugACMEDirectory = "https://acme-staging-v02.api.letsencrypt.org/directory"
+	fmt.Println("domain               | valid | expiry time  | comment")
+	fmt.Println("---------------------+-------+--------------+--------------")
+	for _, info := range infos {
+		var tStr string
+		if !info.Expiry.IsZero() {
+			dt := time.Until(info.Expiry)
+			if dt <= 0 {
+				tStr = "expired"
+			} else if dt > 48*time.Hour {
+				tStr = fmt.Sprintf("%.1f days", float64(dt)/float64(24*time.Hour))
+			} else {
+				tStr = dt.Round(time.Second).String()
+			}
+		}
+		fmt.Printf("%-20s | %-5t | %-12s | %s\n", info.Domain, info.IsValid,
+			tStr, info.Message)
+	}
+	return nil
+}
+
+// Renew all certificates which are not valid for at least 7 more days.
+func Renew(m *cert.Manager) error {
+	infos, err := m.GetCertInfo()
+	if err != nil {
+		return err
+	}
+
+	deadline := time.Now().Add(7 * 24 * time.Hour)
+	for i, info := range infos {
+		if info.IsValid && info.Expiry.After(deadline) {
+			fmt.Println(info.Domain, "is still good")
+			continue
+		}
+		fmt.Println("renewing", info.Domain)
+		err = m.RenewCertificate(i)
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
 
 func main() {
-	config := &cert.Config{
-		AccountDir:    ".",
-		ContactEmail:  "voss@seehuhn.de",
-		ACMEDirectory: DebugACMEDirectory,
+	flag.Parse()
 
-		SiteRoot:        ".",
-		DefaultSiteKey:  "{{.Config.SiteRoot}}/{{.Site.Name}}/keys/private.key",
-		DefaultSiteCert: "{{.Config.SiteRoot}}/{{.Site.Name}}/keys/certificate.crt",
-		DefaultWebPath:  "{{.Config.SiteRoot}}/{{.Site.Name}}/acme",
-		Sites: []*cert.SiteConfig{
+	config := &cert.Config{
+		AccountDir:   ".",
+		ContactEmail: "voss@seehuhn.de",
+
+		SiteRoot:            ".",
+		DefaultSiteKeyFile:  "{{.Config.SiteRoot}}/{{.Site.Name}}/keys/private.key",
+		DefaultSiteCertFile: "{{.Config.SiteRoot}}/{{.Site.Name}}/keys/certificate.crt",
+		DefaultWebPath:      "{{.Config.SiteRoot}}/{{.Site.Name}}/acme",
+		Sites: []*cert.ConfigSite{
 			{
+				Name:   "test",
 				Domain: "test.seehuhn.de",
+			},
+			{
+				Name:   "torpedo",
+				Domain: "torpedo.seehuhn.de",
 			},
 		},
 	}
 
-	ctx := context.TODO()
-
-	m, err := cert.NewManager(ctx, config)
+	m, err := cert.NewManager(config, true)
 	if err != nil {
 		log.Fatal(err)
-	} else if m == nil {
-		fmt.Println("all certificates are current, nothing to do")
-		os.Exit(0)
 	}
 
-	err = m.RenewAll(ctx)
+	// m.InstallDummyCert(1, 10*time.Second)
+
+	cmd := flag.Arg(0)
+
+	switch cmd {
+	case "list":
+		err = List(m)
+	case "dummy":
+		err = m.InstallDummyCert(1, time.Hour)
+	case "renew":
+		err = Renew(m)
+	default:
+		err = fmt.Errorf("unknown command %q", cmd)
+	}
 	if err != nil {
 		log.Fatal(err)
 	}

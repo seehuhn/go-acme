@@ -16,25 +16,82 @@
 
 package cert
 
+import (
+	"bytes"
+	"text/template"
+)
+
 // Config contains the data which describes the certificate management
 // framework for a single web server, potentially serving more than one site.
 type Config struct {
-	AccountDir    string
-	ContactEmail  string
-	ACMEDirectory string
+	AccountDir   string
+	ContactEmail string
 
-	SiteRoot        string
-	DefaultSiteKey  string
-	DefaultSiteCert string
-	DefaultWebPath  string
-	Sites           []*SiteConfig
+	SiteRoot            string
+	DefaultSiteKeyFile  string
+	DefaultSiteCertFile string
+	DefaultWebPath      string
+	Sites               []*ConfigSite
+
+	keyFileTmpl  *template.Template
+	certFileTmpl *template.Template
+	webPathTmpl  *template.Template
 }
 
-// SiteConfig contains the data which describes the certificate management
+// ConfigSite contains the data which describes the certificate management
 // framework for a single domain.
-type SiteConfig struct {
+type ConfigSite struct {
+	Name     string
 	Domain   string
-	KeyPath  string
-	CertPath string
+	KeyFile  string
+	CertFile string
 	WebPath  string
+}
+
+func (c *Config) runTemplate(tmpl *template.Template, i int) (string, error) {
+	buf := &bytes.Buffer{}
+	err := tmpl.Execute(buf, map[string]interface{}{
+		"Config": c,
+		"Site":   c.Sites[i],
+	})
+	if err != nil {
+		return "", err
+	}
+	return buf.String(), nil
+}
+
+// GetKeyFileName returns the file name for the private key of site `i`.
+func (c *Config) GetKeyFileName(i int) (string, error) {
+	if c.Sites[i].KeyFile != "" {
+		return c.Sites[i].KeyFile, nil
+	}
+
+	if c.keyFileTmpl == nil {
+		tmpl := template.New("keyFile")
+		tmpl, err := tmpl.Parse(c.DefaultSiteKeyFile)
+		if err != nil {
+			return "", err
+		}
+		c.keyFileTmpl = tmpl
+	}
+
+	return c.runTemplate(c.keyFileTmpl, i)
+}
+
+// GetCertFileName returns the file name for the certificate of site `i`.
+func (c *Config) GetCertFileName(i int) (string, error) {
+	if c.Sites[i].CertFile != "" {
+		return c.Sites[i].CertFile, nil
+	}
+
+	if c.certFileTmpl == nil {
+		tmpl := template.New("certFile")
+		tmpl, err := tmpl.Parse(c.DefaultSiteCertFile)
+		if err != nil {
+			return "", err
+		}
+		c.certFileTmpl = tmpl
+	}
+
+	return c.runTemplate(c.certFileTmpl, i)
 }

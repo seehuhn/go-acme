@@ -19,8 +19,18 @@ package cert
 import "errors"
 
 var (
-	errInvalidKey         = errors.New("invalid key")
-	errDirectory          = errors.New("not a directory")
-	errInvalidCertificate = errors.New("invalid certificate")
-	errNoChallenge        = errors.New("no http-01 challenge offered")
+	errInvalidKey     = errors.New("invalid key")
+	errNoChallenge    = errors.New("no http-01 challenge offered")
+	errPublicPrivate  = errors.New("public key doesn't match private key")
+	errUnknownKeyType = errors.New("unknown key type")
 )
+
+// FileError is used to report error conditions relating to files
+// or directories.
+type FileError struct {
+	FileName, Problem string
+}
+
+func (err *FileError) Error() string {
+	return err.FileName + ": " + err.Problem
+}
