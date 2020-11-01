@@ -1,5 +1,5 @@
-// Package letsencrypt is the (empty) root of the module tree.
+// Package acme is the (empty) root of the module tree.
 //
-// seehuhn.de/go/letsencrypt/cert - helper package
-// seehuhn.de/go/letsencrypt/getcert - command line client
-package letsencrypt
+// seehuhn.de/go/acme/cert - helper package
+// seehuhn.de/go/acme/servercert - command line client
+package acme  // import "seehuhn.de/go/acme"

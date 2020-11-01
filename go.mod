@@ -1,4 +1,4 @@
-module seehuhn.de/go/letsencrypt
+module seehuhn.de/go/acme
 
 go 1.15
 

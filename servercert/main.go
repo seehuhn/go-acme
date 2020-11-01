@@ -1,4 +1,4 @@
-// seehuhn.de/go/letsencrypt/getcert - a command line tool to manage TLS certificates
+// seehuhn.de/go/acme/servercert - a command line tool to manage TLS certificates
 // Copyright (C) 2020  Jochen Voss <voss@seehuhn.de>
 //
 // This program is free software: you can redistribute it and/or modify
@@ -22,7 +22,7 @@ import (
 	"log"
 	"time"
 
-	"seehuhn.de/go/letsencrypt/cert"
+	"seehuhn.de/go/acme/cert"
 )
 
 // List prints a table with information about all known certificates to stdout.

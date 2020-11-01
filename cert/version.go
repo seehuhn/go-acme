@@ -1,4 +1,4 @@
-// seehuhn.de/go/letsencrypt/cert - a helper to manage TLS certificates
+// seehuhn.de/go/acme/cert - a helper to manage TLS certificates
 // Copyright (C) 2020  Jochen Voss <voss@seehuhn.de>
 //
 // This program is free software: you can redistribute it and/or modify
@@ -20,7 +20,7 @@ import (
 	"runtime/debug"
 )
 
-var packageVersion = "seehuhn.de/go/letsencrypt"
+var packageVersion = "seehuhn.de/go/acme"
 
 func init() {
 	info, ok := debug.ReadBuildInfo()
