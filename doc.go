@@ -2,4 +2,4 @@
 //
 // seehuhn.de/go/acme/cert - helper package
 // seehuhn.de/go/acme/servercert - command line client
-package acme  // import "seehuhn.de/go/acme"
+package acme
