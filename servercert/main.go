@@ -110,7 +110,7 @@ func main() {
 	case "list":
 		err = List(m)
 	case "dummy":
-		err = m.InstallDummyCert(1, time.Hour)
+		err = m.InstallDummyCertificate(1, time.Hour)
 	case "renew":
 		err = Renew(m)
 	default:

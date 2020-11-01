@@ -25,7 +25,6 @@ import (
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"errors"
-	"fmt"
 	"os"
 	"path/filepath"
 	"text/template"
@@ -54,17 +53,10 @@ func NewManager(config *Config, debug bool) (*Manager, error) {
 		return nil, err
 	}
 
-	keyName := filepath.Join(config.AccountDir, "account.key")
-	accountKey, err := loadOrCreatePrivateKey(keyName)
-	if err != nil {
-		return nil, err
-	}
-
 	roots, err := x509.SystemCertPool()
 	if err != nil {
 		return nil, err
 	}
-
 	directory := defaultACMEDirectory
 	if debug {
 		directory = debugACMEDirectory
@@ -72,11 +64,11 @@ func NewManager(config *Config, debug bool) (*Manager, error) {
 	}
 
 	return &Manager{
-		directory:  directory,
-		config:     config,
-		roots:      roots,
-		accountKey: accountKey,
-		siteKeys:   make(map[int]crypto.Signer),
+		directory: directory,
+		config:    config,
+		roots:     roots,
+
+		siteKeys: make(map[int]crypto.Signer),
 	}, nil
 }
 
@@ -191,12 +183,12 @@ func (m *Manager) checkCert(now time.Time, chainDER [][]byte, i int) (*Info, err
 	return info, nil
 }
 
-// InstallDummyCert installs a self-signed dummy certificate for
+// InstallDummyCertificate installs a self-signed dummy certificate for
 // site number `i`.
-func (m *Manager) InstallDummyCert(i int, expiry time.Duration) error {
-	now := time.Now()
+func (m *Manager) InstallDummyCertificate(i int, expiry time.Duration) error {
 	domain := m.config.Sites[i].Domain
-	fname, err := m.config.GetCertFileName(i)
+	now := time.Now()
+
 	privKey, err := m.getKey(i)
 	if err != nil {
 		return err
@@ -217,7 +209,52 @@ func (m *Manager) InstallDummyCert(i int, expiry time.Duration) error {
 	if err != nil {
 		return err
 	}
-	return writePEM(fname, [][]byte{caCertDER}, "CERTIFICATE", 0644)
+	chainDER := [][]byte{caCertDER}
+
+	certPath, err := m.config.GetCertFileName(i)
+	if err != nil {
+		return err
+	}
+	return writePEM(certPath, chainDER, "CERTIFICATE", 0644)
+}
+
+// RenewCertificate requests and installs a new certificate for the given site.
+func (m *Manager) RenewCertificate(i int) error {
+	domain := m.config.Sites[i].Domain
+	now := time.Now()
+
+	csr, err := m.getCSR(i)
+	if err != nil {
+		return err
+	}
+
+	ctx := context.TODO()
+
+	client, err := m.getClient(ctx)
+	if err != nil {
+		return err
+	}
+	order, err := m.getOrder(ctx, client, domain)
+	if err != nil {
+		return err
+	}
+	chainDER, _, err := client.CreateOrderCert(ctx, order.FinalizeURL, csr, true)
+	if err != nil {
+		return err
+	}
+	info, err := m.checkCert(now, chainDER, i)
+	if err != nil {
+		return err
+	}
+	if !info.IsValid {
+		return errors.New("received invalid certificate: " + info.Message)
+	}
+
+	certPath, err := m.config.GetCertFileName(i)
+	if err != nil {
+		return err
+	}
+	return writePEM(certPath, chainDER, "CERTIFICATE", 0644)
 }
 
 func (m *Manager) getKey(i int) (crypto.Signer, error) {
@@ -237,6 +274,20 @@ func (m *Manager) getKey(i int) (crypto.Signer, error) {
 
 	m.siteKeys[i] = key
 	return key, nil
+}
+
+func (m *Manager) getCSR(i int) ([]byte, error) {
+	key, err := m.getKey(i)
+	if err != nil {
+		return nil, err
+	}
+
+	req := &x509.CertificateRequest{
+		Subject: pkix.Name{CommonName: m.config.Sites[i].Domain},
+		// DNSNames: []string{},
+		// ExtraExtensions: ext,
+	}
+	return x509.CreateCertificateRequest(rand.Reader, req, key)
 }
 
 func (m *Manager) getWebRoot(domain string) (string, error) {
@@ -273,76 +324,40 @@ func (m *Manager) publishFile(domain, path string, contents []byte) (string, err
 	return fname, err
 }
 
-// verifyAccount loads or creates the private key for the account and registers
-// the account with Let's Encrypt if needed. The function sets the m.client
-// field.
-func (m *Manager) verifyAccount(ctx context.Context) (*acme.Client, error) {
+func (m *Manager) getAccountKey() (crypto.Signer, error) {
+	if m.accountKey != nil {
+		return m.accountKey, nil
+	}
+
+	keyName := filepath.Join(m.config.AccountDir, "account.key")
+	accountKey, err := loadOrCreatePrivateKey(keyName)
+	if err != nil {
+		return nil, err
+	}
+	m.accountKey = accountKey
+	return accountKey, nil
+}
+
+func (m *Manager) getClient(ctx context.Context) (*acme.Client, error) {
+	accountKey, err := m.getAccountKey()
+	if err != nil {
+		return nil, err
+	}
+
 	client := &acme.Client{
 		DirectoryURL: m.directory,
 		UserAgent:    packageVersion,
-		Key:          m.accountKey,
+		Key:          accountKey,
 	}
-	acct := &acme.Account{
-		Contact: []string{"mailto:" + m.config.ContactEmail},
+	acct := &acme.Account{}
+	if m.config.ContactEmail != "" {
+		acct.Contact = []string{"mailto:" + m.config.ContactEmail}
 	}
-	_, err := client.Register(ctx, acct, acme.AcceptTOS)
+	_, err = client.Register(ctx, acct, acme.AcceptTOS)
 	if err != nil && err != acme.ErrAccountAlreadyExists {
 		return nil, err
 	}
 	return client, nil
-}
-
-// RenewCertificate requests and installs a new certificate for the given site.
-func (m *Manager) RenewCertificate(i int) error {
-	ctx := context.TODO()
-
-	client, err := m.verifyAccount(ctx)
-	if err != nil {
-		return err
-	}
-
-	now := time.Now()
-	site := m.config.Sites[i]
-	order, err := m.getOrder(ctx, client, site.Domain)
-	if err != nil {
-		return err
-	}
-
-	req := &x509.CertificateRequest{
-		Subject: pkix.Name{CommonName: site.Domain},
-		// DNSNames: []string{},
-		// ExtraExtensions: ext,
-	}
-	key, err := m.getKey(i)
-	if err != nil {
-		return err
-	}
-	csr, err := x509.CreateCertificateRequest(rand.Reader, req, key)
-	if err != nil {
-		return err
-	}
-	chainDER, _, err := client.CreateOrderCert(ctx, order.FinalizeURL, csr, true)
-	if err != nil {
-		return err
-	}
-	info, err := m.checkCert(now, chainDER, i)
-	if err != nil {
-		return err
-	}
-	if !info.IsValid {
-		return errors.New("received invalid certificate: " + info.Message)
-	}
-
-	certPath, err := m.config.GetCertFileName(i)
-	if err != nil {
-		return err
-	}
-	fmt.Println("writing", certPath)
-	err = writePEM(certPath, chainDER, "CERTIFICATE", 0644)
-	if err != nil {
-		return err
-	}
-	return nil
 }
 
 func (m *Manager) getOrder(ctx context.Context, client *acme.Client,
