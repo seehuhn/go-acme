@@ -24,6 +24,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"gopkg.in/yaml.v2"
 	"seehuhn.de/go/acme/cert"
 )
 
@@ -142,6 +143,12 @@ func main() {
 			},
 		},
 	}
+
+	out, err := yaml.Marshal(config)
+	if err != nil {
+		log.Fatal(err)
+	}
+	fmt.Println(string(out))
 
 	m, err := cert.NewManager(config, true)
 	if err != nil {

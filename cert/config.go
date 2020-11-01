@@ -43,9 +43,9 @@ type Config struct {
 type ConfigSite struct {
 	Name     string
 	Domain   string
-	KeyFile  string
-	CertFile string
-	WebRoot  string
+	KeyFile  string `yaml:",omitempty"`
+	CertFile string `yaml:",omitempty"`
+	WebRoot  string `yaml:",omitempty"`
 }
 
 func (c *Config) runTemplate(tmpl *template.Template, i int) (string, error) {
