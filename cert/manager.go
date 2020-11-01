@@ -26,10 +26,8 @@ import (
 	"crypto/x509/pkix"
 	"errors"
 	"fmt"
-	"io/ioutil"
 	"os"
 	"path/filepath"
-	"strings"
 	"text/template"
 	"time"
 
@@ -241,6 +239,40 @@ func (m *Manager) getKey(i int) (crypto.Signer, error) {
 	return key, nil
 }
 
+func (m *Manager) getWebRoot(domain string) (string, error) {
+	for i, site := range m.config.Sites {
+		if site.Domain == domain {
+			return m.config.GetWebRoot(i)
+		}
+	}
+	return "", errUnknownDomain
+}
+
+// Put a file with the given contents on the web server.
+// Returns the created file name (to be used when later removing the file)
+// and an error, if any.
+func (m *Manager) publishFile(domain, path string, contents []byte) (string, error) {
+	root, err := m.getWebRoot(domain)
+	if err != nil {
+		return "", err
+	}
+	fname := filepath.Join(root, filepath.Clean(filepath.FromSlash(path)))
+
+	err = os.MkdirAll(filepath.Dir(fname), 0755)
+	if err != nil {
+		return "", err
+	}
+
+	fd, err := os.Create(fname)
+	if err != nil {
+		return "", err
+	}
+	defer fd.Close()
+
+	_, err = fd.Write(contents)
+	return fname, err
+}
+
 // verifyAccount loads or creates the private key for the account and registers
 // the account with Let's Encrypt if needed. The function sets the m.client
 // field.
@@ -264,7 +296,6 @@ func (m *Manager) verifyAccount(ctx context.Context) (*acme.Client, error) {
 func (m *Manager) RenewCertificate(i int) error {
 	ctx := context.TODO()
 
-	// this sets m.client
 	client, err := m.verifyAccount(ctx)
 	if err != nil {
 		return err
@@ -272,19 +303,14 @@ func (m *Manager) RenewCertificate(i int) error {
 
 	now := time.Now()
 	site := m.config.Sites[i]
-	domain := site.Domain
-	order, err := client.AuthorizeOrder(ctx, acme.DomainIDs(domain))
-	if err != nil {
-		return err
-	}
-	order, err = m.finishAuthorization(ctx, client, order, site)
+	order, err := m.getOrder(ctx, client, site.Domain)
 	if err != nil {
 		return err
 	}
 
 	req := &x509.CertificateRequest{
-		Subject:  pkix.Name{CommonName: site.Domain},
-		DNSNames: []string{},
+		Subject: pkix.Name{CommonName: site.Domain},
+		// DNSNames: []string{},
 		// ExtraExtensions: ext,
 	}
 	key, err := m.getKey(i)
@@ -319,69 +345,68 @@ func (m *Manager) RenewCertificate(i int) error {
 	return nil
 }
 
-func (m *Manager) finishAuthorization(ctx context.Context, client *acme.Client,
-	order *acme.Order, site *ConfigSite) (*acme.Order, error) {
+func (m *Manager) getOrder(ctx context.Context, client *acme.Client,
+	domain string) (*acme.Order, error) {
+	order, err := client.AuthorizeOrder(ctx, acme.DomainIDs(domain))
+	if err != nil {
+		return nil, err
+	}
 	if order.Status == acme.StatusReady {
-		// fmt.Println(site.Domain, "already authorized")
 		return order, nil
 	}
-	// fmt.Println(site.Domain, "needs authorization")
-	for _, zurl := range order.AuthzURLs {
-		z, err := client.GetAuthorization(ctx, zurl)
-		if err != nil {
-			return nil, err
-		}
-		if z.Status != acme.StatusPending {
-			continue
-		}
 
-		var challenge *acme.Challenge
-		for _, c := range z.Challenges {
-			if c.Type == "http-01" {
-				challenge = c
-				break
-			}
-		}
-		if challenge == nil {
-			return nil, errNoChallenge
-		}
-
-		resp, err := client.HTTP01ChallengeResponse(challenge.Token)
-		if err != nil {
-			return nil, err
-		}
-
-		webPath := site.WebPath
-		if webPath == "" {
-			if m.webPathTmpl == nil {
-				m.webPathTmpl = template.New("webPath")
-				m.webPathTmpl = template.Must(m.webPathTmpl.Parse(m.config.DefaultWebPath))
-			}
-
-			buf := &strings.Builder{}
-			err := m.webPathTmpl.Execute(buf, map[string]interface{}{
-				"Config": m.config,
-				"Site":   site,
-			})
-			if err != nil {
-				return nil, err
-			}
-			webPath = buf.String()
-		}
-		webPath = webPath + client.HTTP01ChallengePath(challenge.Token)
-		os.MkdirAll(filepath.Dir(webPath), 0755)
-		ioutil.WriteFile(webPath, []byte(resp), 0644)
-
-		_, err = client.Accept(ctx, challenge)
-		if err != nil {
-			return nil, err
-		}
-
-		_, err = client.WaitAuthorization(ctx, z.URI)
+	for _, authzURL := range order.AuthzURLs {
+		err := m.authorizeOne(ctx, client, authzURL)
 		if err != nil {
 			return nil, err
 		}
 	}
-	fmt.Println("success")
 	return client.WaitOrder(ctx, order.URI)
+}
+
+func (m *Manager) authorizeOne(ctx context.Context, client *acme.Client, authzURL string) error {
+	auth, err := client.GetAuthorization(ctx, authzURL)
+	if err != nil {
+		return err
+	}
+	if auth.Identifier.Type != "dns" {
+		return errUnknownIDType
+	}
+	if auth.Status != acme.StatusPending {
+		return nil
+	}
+
+	var challenge *acme.Challenge
+	for _, c := range auth.Challenges {
+		if c.Type == "http-01" {
+			challenge = c
+			break
+		}
+	}
+	if challenge == nil {
+		return errNoChallenge
+	}
+
+	domain := auth.Identifier.Value
+	path := client.HTTP01ChallengePath(challenge.Token)
+	contents, err := client.HTTP01ChallengeResponse(challenge.Token)
+	if err != nil {
+		return err
+	}
+
+	fname, err := m.publishFile(domain, path, []byte(contents))
+	if fname != "" {
+		defer os.Remove(fname)
+	}
+	if err != nil {
+		return err
+	}
+
+	_, err = client.Accept(ctx, challenge)
+	if err != nil {
+		return err
+	}
+
+	_, err = client.WaitAuthorization(ctx, auth.URI)
+	return err
 }

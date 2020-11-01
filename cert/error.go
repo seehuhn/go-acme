@@ -23,6 +23,8 @@ var (
 	errNoChallenge    = errors.New("no http-01 challenge offered")
 	errPublicPrivate  = errors.New("public key doesn't match private key")
 	errUnknownKeyType = errors.New("unknown key type")
+	errUnknownIDType  = errors.New("unknown ID type")
+	errUnknownDomain  = errors.New("unknown domain")
 )
 
 // FileError is used to report error conditions relating to files

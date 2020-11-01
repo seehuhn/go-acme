@@ -84,7 +84,7 @@ func main() {
 		SiteRoot:            ".",
 		DefaultSiteKeyFile:  "{{.Config.SiteRoot}}/{{.Site.Name}}/keys/private.key",
 		DefaultSiteCertFile: "{{.Config.SiteRoot}}/{{.Site.Name}}/keys/certificate.crt",
-		DefaultWebPath:      "{{.Config.SiteRoot}}/{{.Site.Name}}/acme",
+		DefaultWebRoot:      "{{.Config.SiteRoot}}/{{.Site.Name}}/acme",
 		Sites: []*cert.ConfigSite{
 			{
 				Name:   "test",

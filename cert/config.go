@@ -30,12 +30,12 @@ type Config struct {
 	SiteRoot            string
 	DefaultSiteKeyFile  string
 	DefaultSiteCertFile string
-	DefaultWebPath      string
+	DefaultWebRoot      string
 	Sites               []*ConfigSite
 
 	keyFileTmpl  *template.Template
 	certFileTmpl *template.Template
-	webPathTmpl  *template.Template
+	webRootTmpl  *template.Template
 }
 
 // ConfigSite contains the data which describes the certificate management
@@ -45,7 +45,7 @@ type ConfigSite struct {
 	Domain   string
 	KeyFile  string
 	CertFile string
-	WebPath  string
+	WebRoot  string
 }
 
 func (c *Config) runTemplate(tmpl *template.Template, i int) (string, error) {
@@ -94,4 +94,23 @@ func (c *Config) GetCertFileName(i int) (string, error) {
 	}
 
 	return c.runTemplate(c.certFileTmpl, i)
+}
+
+// GetWebRoot returns the path of directory which corresponds to the
+// root of the file tree served by site `i`.
+func (c *Config) GetWebRoot(i int) (string, error) {
+	if c.Sites[i].WebRoot != "" {
+		return c.Sites[i].WebRoot, nil
+	}
+
+	if c.webRootTmpl == nil {
+		tmpl := template.New("webRoot")
+		tmpl, err := tmpl.Parse(c.DefaultWebRoot)
+		if err != nil {
+			return "", err
+		}
+		c.webRootTmpl = tmpl
+	}
+
+	return c.runTemplate(c.webRootTmpl, i)
 }
