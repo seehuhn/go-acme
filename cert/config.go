@@ -25,12 +25,12 @@ import (
 // framework for a single web server, potentially serving more than one site.
 type Config struct {
 	AccountDir   string
-	ContactEmail string
+	ContactEmail string `yaml:",omitempty"`
 
-	SiteRoot            string
-	DefaultSiteKeyFile  string
-	DefaultSiteCertFile string
-	DefaultWebRoot      string
+	SiteRoot            string `yaml:",omitempty"`
+	DefaultSiteKeyFile  string `yaml:",omitempty"`
+	DefaultSiteCertFile string `yaml:",omitempty"`
+	DefaultWebRoot      string `yaml:",omitempty"`
 	Sites               []*ConfigSite
 
 	keyFileTmpl  *template.Template

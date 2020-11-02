@@ -20,11 +20,13 @@ import (
 	"flag"
 	"fmt"
 	"log"
+	"os"
 	"strings"
 	"time"
 	"unicode/utf8"
 
-	"gopkg.in/yaml.v2"
+	"gopkg.in/yaml.v3"
+
 	"seehuhn.de/go/acme/cert"
 )
 
@@ -39,6 +41,23 @@ func (T *table) SetHeader(names ...string) {
 
 func (T *table) AddRow(row ...string) {
 	T.rows = append(T.rows, row)
+}
+
+func readConfig(fname string) (*cert.Config, error) {
+	fd, err := os.Open(fname)
+	if err != nil {
+		return nil, err
+	}
+	defer fd.Close()
+
+	config := &cert.Config{}
+	dec := yaml.NewDecoder(fd)
+	err = dec.Decode(config)
+	if err != nil {
+		return nil, err
+	}
+
+	return config, nil
 }
 
 func (T *table) Show() {
@@ -109,7 +128,14 @@ func Renew(m *cert.Manager) error {
 	deadline := time.Now().Add(7 * 24 * time.Hour)
 	for i, info := range infos {
 		if info.IsValid && info.Expiry.After(deadline) {
-			fmt.Println(info.Domain, "is still good")
+			dt := time.Until(info.Expiry)
+			var tStr string
+			if dt > 48*time.Hour {
+				tStr = fmt.Sprintf("%.1f days", float64(dt)/float64(24*time.Hour))
+			} else {
+				tStr = dt.Round(time.Second).String()
+			}
+			fmt.Println(info.Domain, "is valid for another "+tStr)
 			continue
 		}
 		fmt.Println("renewing", info.Domain)
@@ -124,31 +150,10 @@ func Renew(m *cert.Manager) error {
 func main() {
 	flag.Parse()
 
-	config := &cert.Config{
-		AccountDir:   ".",
-		ContactEmail: "voss@seehuhn.de",
-
-		SiteRoot:            ".",
-		DefaultSiteKeyFile:  "{{.Config.SiteRoot}}/{{.Site.Name}}/keys/private.key",
-		DefaultSiteCertFile: "{{.Config.SiteRoot}}/{{.Site.Name}}/keys/certificate.crt",
-		DefaultWebRoot:      "{{.Config.SiteRoot}}/{{.Site.Name}}/acme",
-		Sites: []*cert.ConfigSite{
-			{
-				Name:   "test",
-				Domain: "test.seehuhn.de",
-			},
-			{
-				Name:   "torpedo",
-				Domain: "torpedo.seehuhn.de",
-			},
-		},
-	}
-
-	out, err := yaml.Marshal(config)
+	config, err := readConfig("config.yml")
 	if err != nil {
 		log.Fatal(err)
 	}
-	fmt.Println(string(out))
 
 	m, err := cert.NewManager(config, true)
 	if err != nil {
@@ -160,10 +165,10 @@ func main() {
 	cmd := flag.Arg(0)
 
 	switch cmd {
+	case "ignore":
+		// pass
 	case "list":
 		err = List(m)
-	case "dummy":
-		err = m.InstallDummyCertificate(1, time.Hour)
 	case "renew":
 		err = Renew(m)
 	default:
