@@ -20,12 +20,14 @@ import (
 	"runtime/debug"
 )
 
-var packageVersion = "seehuhn.de/go/acme"
+// PackageVersion gives the acme package name and version (updated in an init
+// function).
+var PackageVersion = "seehuhn.de/go/acme"
 
 func init() {
 	info, ok := debug.ReadBuildInfo()
 	if !ok || info.Main.Replace != nil {
 		return
 	}
-	packageVersion = info.Main.Path + ", version " + info.Main.Version
+	PackageVersion = info.Main.Path + ", version " + info.Main.Version
 }

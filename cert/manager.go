@@ -80,20 +80,17 @@ func NewManager(config *Config, debug bool) (*Manager, error) {
 	}, nil
 }
 
-// Info contains information about a single certificate installed on the
-// system.
-type Info struct {
-	Domain    string
-	IsValid   bool
-	IsMissing bool
-	Expiry    time.Time
-	Message   string
+// Domains returns all domain names known to this manager.
+func (m *Manager) Domains() []string {
+	dd := make([]string, len(m.config.Sites))
+	for i, site := range m.config.Sites {
+		dd[i] = site.Domain
+	}
+	return dd
 }
 
 // CheckConfig checks the configuration file of `m` for problems.
-// ,sgFileName is only used in error messages, and must match the file name the
-// config of `m` was loaded from.
-func (m *Manager) CheckConfig(msgFileName string) error {
+func (m *Manager) CheckConfig() error {
 	_, err := m.getAccountKey()
 	if err != nil {
 		return err
@@ -101,8 +98,7 @@ func (m *Manager) CheckConfig(msgFileName string) error {
 
 	if len(m.config.Sites) == 0 {
 		return &FileError{
-			FileName: msgFileName,
-			Problem:  "contains no sites",
+			Problem: "contains no sites",
 		}
 	}
 
@@ -112,13 +108,12 @@ func (m *Manager) CheckConfig(msgFileName string) error {
 		domain := site.Domain
 		if seen[domain] {
 			return &FileError{
-				FileName: msgFileName,
-				Problem:  "contains no sites",
+				Problem: "contains no sites",
 			}
 		}
 		seen[domain] = true
 
-		err = m.checkOneSite(msgFileName, domain)
+		err = m.checkOneSite(domain)
 		if err != nil {
 			return err
 		}
@@ -127,7 +122,7 @@ func (m *Manager) CheckConfig(msgFileName string) error {
 	return nil
 }
 
-func (m *Manager) checkOneSite(FileName string, domain string) error {
+func (m *Manager) checkOneSite(domain string) error {
 	_, err := m.getKey(domain)
 	if err != nil {
 		return err
@@ -158,42 +153,44 @@ func (m *Manager) checkOneSite(FileName string, domain string) error {
 
 	if bytes.Compare(token, body) != 0 {
 		return &FileError{
-			FileName: FileName,
-			Problem:  "cannot publish challenges for " + domain,
+			Problem: "cannot publish challenges for " + domain,
 		}
 	}
 
 	return nil
 }
 
-// GetCertInfo returns information about all certificates managed by `m`.
-func (m *Manager) GetCertInfo() ([]*Info, error) {
-	n := len(m.config.Sites)
-	res := make([]*Info, n)
-	now := time.Now()
-	for i := 0; i < n; i++ {
-		certFileName, err := m.config.GetCertFileName(i)
-		if err != nil {
-			return nil, err
-		}
-		chainDER, err := loadCertChain(certFileName)
-		if err != nil && !os.IsNotExist(err) {
-			return nil, err
-		}
-
-		info, err := m.checkCert(now, chainDER, i)
-		if err != nil {
-			return nil, err
-		}
-		res[i] = info
-	}
-	return res, nil
+// Info contains information about a single certificate installed on the
+// system.
+type Info struct {
+	Domain    string
+	IsValid   bool
+	IsMissing bool
+	Expiry    time.Time
+	Message   string
 }
 
-// InstallDummyCertificate installs a self-signed dummy certificate for
-// site number `i`.
-func (m *Manager) InstallDummyCertificate(i int, expiry time.Duration) error {
-	domain := m.config.Sites[i].Domain
+// GetCertInfo returns information about all certificates managed by `m`.
+func (m *Manager) GetCertInfo(domain string) (*Info, error) {
+	certFileName, err := m.config.GetCertFileName(domain)
+	if err != nil {
+		return nil, err
+	}
+	chainDER, err := loadCertChain(certFileName)
+	if err != nil && !os.IsNotExist(err) {
+		return nil, err
+	}
+
+	info, err := m.checkCert(time.Now(), chainDER, domain)
+	if err != nil {
+		return nil, err
+	}
+
+	return info, nil
+}
+
+// InstallSelfSigned installs a self-signed dummy certificate for a domain.
+func (m *Manager) InstallSelfSigned(domain string, expiry time.Duration) error {
 	now := time.Now()
 
 	privKey, err := m.getKey(domain)
@@ -218,19 +215,19 @@ func (m *Manager) InstallDummyCertificate(i int, expiry time.Duration) error {
 	}
 	chainDER := [][]byte{caCertDER}
 
-	certPath, err := m.config.GetCertFileName(i)
+	certPath, err := m.config.GetCertFileName(domain)
 	if err != nil {
 		return err
 	}
 	return writePEM(certPath, chainDER, "CERTIFICATE", 0644)
 }
 
-// RenewCertificate requests and installs a new certificate for the given site.
-func (m *Manager) RenewCertificate(i int) error {
-	domain := m.config.Sites[i].Domain
+// RenewCertificate requests and installs a new certificate for the given
+// domain.
+func (m *Manager) RenewCertificate(domain string) error {
 	now := time.Now()
 
-	csr, err := m.getCSR(i)
+	csr, err := m.getCSR(domain)
 	if err != nil {
 		return err
 	}
@@ -249,7 +246,7 @@ func (m *Manager) RenewCertificate(i int) error {
 	if err != nil {
 		return err
 	}
-	info, err := m.checkCert(now, chainDER, i)
+	info, err := m.checkCert(now, chainDER, domain)
 	if err != nil {
 		return err
 	}
@@ -257,7 +254,7 @@ func (m *Manager) RenewCertificate(i int) error {
 		return errors.New("received invalid certificate: " + info.Message)
 	}
 
-	certPath, err := m.config.GetCertFileName(i)
+	certPath, err := m.config.GetCertFileName(domain)
 	if err != nil {
 		return err
 	}
@@ -283,14 +280,14 @@ func (m *Manager) getKey(domain string) (crypto.Signer, error) {
 	return key, nil
 }
 
-func (m *Manager) getCSR(i int) ([]byte, error) {
-	key, err := m.getKey(m.config.Sites[i].Domain)
+func (m *Manager) getCSR(domain string) ([]byte, error) {
+	key, err := m.getKey(domain)
 	if err != nil {
 		return nil, err
 	}
 
 	req := &x509.CertificateRequest{
-		Subject: pkix.Name{CommonName: m.config.Sites[i].Domain},
+		Subject: pkix.Name{CommonName: domain},
 		// DNSNames: []string{},
 		// ExtraExtensions: ext,
 	}
@@ -298,12 +295,7 @@ func (m *Manager) getCSR(i int) ([]byte, error) {
 }
 
 func (m *Manager) getWebRoot(domain string) (string, error) {
-	for i, site := range m.config.Sites {
-		if site.Domain == domain {
-			return m.config.GetWebRoot(i)
-		}
-	}
-	return "", errUnknownDomain
+	return m.config.GetWebRoot(domain)
 }
 
 // Put a file with the given contents on the web server.
@@ -345,8 +337,7 @@ func (m *Manager) getAccountKey() (crypto.Signer, error) {
 	return accountKey, nil
 }
 
-func (m *Manager) checkCert(now time.Time, chainDER [][]byte, i int) (*Info, error) {
-	domain := m.config.Sites[i].Domain
+func (m *Manager) checkCert(now time.Time, chainDER [][]byte, domain string) (*Info, error) {
 	info := &Info{
 		Domain: domain,
 	}
@@ -373,7 +364,7 @@ func (m *Manager) checkCert(now time.Time, chainDER [][]byte, i int) (*Info, err
 	}
 
 	// Ensure the siteCert corresponds to the correct private key.
-	key, err := m.getKey(m.config.Sites[i].Domain)
+	key, err := m.getKey(domain)
 	if err != nil {
 		return nil, err
 	}
@@ -430,7 +421,7 @@ func (m *Manager) getClient(ctx context.Context) (*acme.Client, error) {
 
 	client := &acme.Client{
 		DirectoryURL: m.directory,
-		UserAgent:    packageVersion,
+		UserAgent:    PackageVersion,
 		Key:          accountKey,
 	}
 	acct := &acme.Account{}

@@ -19,17 +19,21 @@ package cert
 import "errors"
 
 var (
-	// ErrNoDomain indicates that a domain cannot be found in the configuration
-	// file.
-	ErrNoDomain = errors.New("domain not found")
-
 	errInvalidKey     = errors.New("invalid key")
 	errNoChallenge    = errors.New("no http-01 challenge offered")
-	errPublicPrivate  = errors.New("public key doesn't match private key")
 	errUnknownKeyType = errors.New("unknown key type")
 	errUnknownIDType  = errors.New("unknown ID type")
-	errUnknownDomain  = errors.New("unknown domain")
 )
+
+// A DomainError indicates that a domain cannot be found in the configuration
+// file.
+type DomainError struct {
+	Domain string
+}
+
+func (err *DomainError) Error() string {
+	return "domain " + err.Domain + " not found"
+}
 
 // FileError is used to report error conditions relating to files
 // or directories.

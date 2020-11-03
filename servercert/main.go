@@ -17,10 +17,12 @@
 package main
 
 import (
+	"errors"
 	"flag"
 	"fmt"
 	"log"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -29,6 +31,9 @@ import (
 
 	"seehuhn.de/go/acme/cert"
 )
+
+var configFileName = flag.String("c", "config.yml",
+	"name of the configuration file")
 
 type table struct {
 	header []string
@@ -91,16 +96,34 @@ func (T *table) Show() {
 	}
 }
 
-// List prints a table with information about all known certificates to stdout.
-func List(m *cert.Manager) error {
-	infos, err := m.GetCertInfo()
-	if err != nil {
-		return err
+// CmdCheck checks the data from the configuration file for correctness and
+// consistency.
+func CmdCheck(m *cert.Manager, args ...string) error {
+	err := m.CheckConfig()
+	if fe, ok := err.(*cert.FileError); ok {
+		fe.FileName = *configFileName
+	}
+	return err
+}
+
+// CmdList prints a table with information about all known certificates to stdout.
+func CmdList(m *cert.Manager, args ...string) error {
+	ff := flag.NewFlagSet("list", flag.ExitOnError)
+	ff.Parse(args)
+
+	domains := ff.Args()
+	if len(domains) == 0 {
+		domains = m.Domains()
 	}
 
 	T := &table{}
 	T.SetHeader("domain", "valid", "expiry time", "comment")
-	for _, info := range infos {
+	for _, domain := range domains {
+		info, err := m.GetCertInfo(domain)
+		if err != nil {
+			return err
+		}
+
 		var tStr string
 		if !info.Expiry.IsZero() {
 			dt := time.Until(info.Expiry)
@@ -118,16 +141,36 @@ func List(m *cert.Manager) error {
 	return nil
 }
 
-// Renew all certificates which are not valid for at least 7 more days.
-func Renew(m *cert.Manager) error {
-	infos, err := m.GetCertInfo()
-	if err != nil {
-		return err
+// CmdRenew all certificates which are not valid for at least 7 more days.
+func CmdRenew(m *cert.Manager, args ...string) error {
+	ff := flag.NewFlagSet("renew", flag.ExitOnError)
+	force := ff.Bool("f", false, "renew even if the old cert is still good")
+	ff.Parse(args)
+
+	domains := ff.Args()
+	doRenew := make(map[string]bool)
+	for _, site := range domains {
+		doRenew[site] = false
+	}
+	for _, domain := range m.Domains() {
+		if _, ok := doRenew[domain]; ok || len(domains) == 0 {
+			doRenew[domain] = true
+		}
+	}
+	for domain, isGood := range doRenew {
+		if !isGood {
+			return &cert.DomainError{Domain: domain}
+		}
 	}
 
 	deadline := time.Now().Add(7 * 24 * time.Hour)
-	for i, info := range infos {
-		if info.IsValid && info.Expiry.After(deadline) {
+	for domain := range doRenew {
+		info, err := m.GetCertInfo(domain)
+		if err != nil {
+			return err
+		}
+
+		if !*force && info.IsValid && info.Expiry.After(deadline) {
 			dt := time.Until(info.Expiry)
 			var tStr string
 			if dt > 48*time.Hour {
@@ -135,11 +178,41 @@ func Renew(m *cert.Manager) error {
 			} else {
 				tStr = dt.Round(time.Second).String()
 			}
-			fmt.Println(info.Domain, "is valid for another "+tStr)
+			fmt.Println(domain, "is valid for another "+tStr)
 			continue
 		}
-		fmt.Println("renewing", info.Domain)
-		err = m.RenewCertificate(i)
+		fmt.Println("renewing", domain)
+		err = m.RenewCertificate(domain)
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// CmdSelfSigned installs a self-signed dummy certificate for a domain.
+func CmdSelfSigned(m *cert.Manager, args ...string) error {
+	ff := flag.NewFlagSet("self-signed", flag.ExitOnError)
+	force := ff.Bool("f", false, "replace valid certificates")
+	ff.Parse(args)
+
+	domains := ff.Args()
+	if len(domains) == 0 {
+		return errors.New("no domains given")
+	}
+	for _, domain := range domains {
+		if !*force {
+			info, err := m.GetCertInfo(domain)
+			if err != nil {
+				return err
+			}
+			if info.IsValid {
+				return errors.New(domain + " has a valid certificate")
+			}
+		}
+
+		fmt.Println("installing self-signed certificate for " + domain + " ...")
+		err := m.InstallSelfSigned(domain, time.Hour)
 		if err != nil {
 			return err
 		}
@@ -148,10 +221,35 @@ func Renew(m *cert.Manager) error {
 }
 
 func main() {
-	flag.Parse()
+	cmds := map[string]func(*cert.Manager, ...string) error{
+		"check":       CmdCheck,
+		"list":        CmdList,
+		"renew":       CmdRenew,
+		"self-signed": CmdSelfSigned,
+	}
 
-	configFileName := "config.yml"
-	config, err := readConfig(configFileName)
+	flag.Usage = func() {
+		name := filepath.Base(os.Args[0])
+		fmt.Fprintf(flag.CommandLine.Output(),
+			"usage: %s [options] command [arguments]\n\n", name)
+		fmt.Fprintln(flag.CommandLine.Output(), "Valid options are:")
+		flag.PrintDefaults()
+		fmt.Fprintln(flag.CommandLine.Output(), "\nCommand must be one of")
+		for key := range cmds {
+			fmt.Println("    " + key)
+		}
+		fmt.Fprintf(flag.CommandLine.Output(),
+			"\nUse \"%s command -h\" to get help about a specific command.\n",
+			name)
+	}
+	flag.Parse()
+	args := flag.Args()
+	if len(args) == 0 {
+		flag.Usage()
+		os.Exit(0)
+	}
+
+	config, err := readConfig(*configFileName)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -161,20 +259,13 @@ func main() {
 		log.Fatal(err)
 	}
 
-	// m.InstallDummyCert(1, 10*time.Second)
-
-	cmd := flag.Arg(0)
-
-	switch cmd {
-	case "check":
-		err = m.CheckConfig(configFileName)
-	case "list":
-		err = List(m)
-	case "renew":
-		err = Renew(m)
-	default:
-		err = fmt.Errorf("unknown command %q", cmd)
+	fn, ok := cmds[args[0]]
+	if ok {
+		err = fn(m, args[1:]...)
+	} else {
+		err = fmt.Errorf("unknown command %q", args[0])
 	}
+
 	if err != nil {
 		log.Fatal(err)
 	}

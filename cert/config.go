@@ -73,7 +73,12 @@ func (c *Config) GetKeyFileName(domain string) (string, error) {
 }
 
 // GetCertFileName returns the file name for the certificate of site `i`.
-func (c *Config) GetCertFileName(i int) (string, error) {
+func (c *Config) GetCertFileName(domain string) (string, error) {
+	i, err := c.getDomainIndex(domain)
+	if err != nil {
+		return "", err
+	}
+
 	if c.Sites[i].CertFile != "" {
 		return c.Sites[i].CertFile, nil
 	}
@@ -92,7 +97,12 @@ func (c *Config) GetCertFileName(i int) (string, error) {
 
 // GetWebRoot returns the path of directory which corresponds to the
 // root of the file tree served by site `i`.
-func (c *Config) GetWebRoot(i int) (string, error) {
+func (c *Config) GetWebRoot(domain string) (string, error) {
+	i, err := c.getDomainIndex(domain)
+	if err != nil {
+		return "", err
+	}
+
 	if c.Sites[i].WebRoot != "" {
 		return c.Sites[i].WebRoot, nil
 	}
@@ -119,7 +129,7 @@ func (c *Config) getDomainIndex(domain string) (int, error) {
 
 	idx, ok := c.domainIdx[domain]
 	if !ok {
-		return -1, ErrNoDomain
+		return -1, &DomainError{Domain: domain}
 	}
 	return idx, nil
 }
