@@ -33,6 +33,7 @@ type Config struct {
 	DefaultWebRoot      string `yaml:",omitempty"`
 	Sites               []*ConfigSite
 
+	domainIdx    map[string]int
 	keyFileTmpl  *template.Template
 	certFileTmpl *template.Template
 	webRootTmpl  *template.Template
@@ -48,20 +49,13 @@ type ConfigSite struct {
 	WebRoot  string `yaml:",omitempty"`
 }
 
-func (c *Config) runTemplate(tmpl *template.Template, i int) (string, error) {
-	buf := &bytes.Buffer{}
-	err := tmpl.Execute(buf, map[string]interface{}{
-		"Config": c,
-		"Site":   c.Sites[i],
-	})
+// GetKeyFileName returns the file name for the private key of `domain`.
+func (c *Config) GetKeyFileName(domain string) (string, error) {
+	i, err := c.getDomainIndex(domain)
 	if err != nil {
 		return "", err
 	}
-	return buf.String(), nil
-}
 
-// GetKeyFileName returns the file name for the private key of site `i`.
-func (c *Config) GetKeyFileName(i int) (string, error) {
 	if c.Sites[i].KeyFile != "" {
 		return c.Sites[i].KeyFile, nil
 	}
@@ -113,4 +107,31 @@ func (c *Config) GetWebRoot(i int) (string, error) {
 	}
 
 	return c.runTemplate(c.webRootTmpl, i)
+}
+
+func (c *Config) getDomainIndex(domain string) (int, error) {
+	if c.domainIdx == nil {
+		c.domainIdx = make(map[string]int)
+		for i, site := range c.Sites {
+			c.domainIdx[site.Domain] = i
+		}
+	}
+
+	idx, ok := c.domainIdx[domain]
+	if !ok {
+		return -1, ErrNoDomain
+	}
+	return idx, nil
+}
+
+func (c *Config) runTemplate(tmpl *template.Template, i int) (string, error) {
+	buf := &bytes.Buffer{}
+	err := tmpl.Execute(buf, map[string]interface{}{
+		"Config": c,
+		"Site":   c.Sites[i],
+	})
+	if err != nil {
+		return "", err
+	}
+	return buf.String(), nil
 }

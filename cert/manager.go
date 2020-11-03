@@ -17,6 +17,7 @@
 package cert
 
 import (
+	"bytes"
 	"context"
 	"crypto"
 	"crypto/ecdsa"
@@ -24,14 +25,21 @@ import (
 	"crypto/rsa"
 	"crypto/x509"
 	"crypto/x509/pkix"
+	"encoding/base64"
 	"errors"
+	"io"
+	"io/ioutil"
+	"net/http"
 	"os"
+	"path"
 	"path/filepath"
 	"text/template"
 	"time"
 
 	"golang.org/x/crypto/acme"
 )
+
+const accountKeyName = "account.key"
 
 // Manager holds all state required to generate and/or renew certificates
 // via Let's Encrypt.
@@ -41,7 +49,7 @@ type Manager struct {
 	roots     *x509.CertPool
 
 	accountKey crypto.Signer
-	siteKeys   map[int]crypto.Signer
+	siteKeys   map[string]crypto.Signer
 
 	webPathTmpl *template.Template
 }
@@ -68,7 +76,7 @@ func NewManager(config *Config, debug bool) (*Manager, error) {
 		config:    config,
 		roots:     roots,
 
-		siteKeys: make(map[int]crypto.Signer),
+		siteKeys: make(map[string]crypto.Signer),
 	}, nil
 }
 
@@ -80,6 +88,82 @@ type Info struct {
 	IsMissing bool
 	Expiry    time.Time
 	Message   string
+}
+
+// CheckConfig checks the configuration file of `m` for problems.
+// ,sgFileName is only used in error messages, and must match the file name the
+// config of `m` was loaded from.
+func (m *Manager) CheckConfig(msgFileName string) error {
+	_, err := m.getAccountKey()
+	if err != nil {
+		return err
+	}
+
+	if len(m.config.Sites) == 0 {
+		return &FileError{
+			FileName: msgFileName,
+			Problem:  "contains no sites",
+		}
+	}
+
+	// try to publish a file for each site
+	seen := make(map[string]bool)
+	for _, site := range m.config.Sites {
+		domain := site.Domain
+		if seen[domain] {
+			return &FileError{
+				FileName: msgFileName,
+				Problem:  "contains no sites",
+			}
+		}
+		seen[domain] = true
+
+		err = m.checkOneSite(msgFileName, domain)
+		if err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+func (m *Manager) checkOneSite(FileName string, domain string) error {
+	_, err := m.getKey(domain)
+	if err != nil {
+		return err
+	}
+
+	token := make([]byte, 8)
+	_, err = io.ReadFull(rand.Reader, token)
+	if err != nil {
+		return err
+	}
+	tokenStr := base64.RawURLEncoding.EncodeToString(token)
+	urlPath := path.Join(".well-known/acme-challenge", "jvcert-"+tokenStr)
+	fname, err := m.publishFile(domain, urlPath, token)
+	if err != nil {
+		return err
+	}
+	defer os.Remove(fname)
+
+	resp, err := http.Get("http://" + domain + "/" + urlPath)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	body, err := ioutil.ReadAll(resp.Body)
+	if err != nil {
+		return err
+	}
+
+	if bytes.Compare(token, body) != 0 {
+		return &FileError{
+			FileName: FileName,
+			Problem:  "cannot publish challenges for " + domain,
+		}
+	}
+
+	return nil
 }
 
 // GetCertInfo returns information about all certificates managed by `m`.
@@ -106,90 +190,13 @@ func (m *Manager) GetCertInfo() ([]*Info, error) {
 	return res, nil
 }
 
-func (m *Manager) checkCert(now time.Time, chainDER [][]byte, i int) (*Info, error) {
-	domain := m.config.Sites[i].Domain
-	info := &Info{
-		Domain: domain,
-	}
-
-	if chainDER == nil {
-		info.IsMissing = true
-		info.Message = "missing"
-		return info, nil
-	}
-
-	siteCertDER := chainDER[0]
-	siteCert, err := x509.ParseCertificate(siteCertDER)
-	if err != nil {
-		return nil, err
-	}
-	if now.Before(siteCert.NotBefore) {
-		info.Message = "not valid until " + siteCert.NotBefore.String()
-		return info, nil
-	}
-	info.Expiry = siteCert.NotAfter
-	if now.After(siteCert.NotAfter) {
-		info.Message = "expired on " + siteCert.NotAfter.String()
-		return info, nil
-	}
-
-	// Ensure the siteCert corresponds to the correct private key.
-	key, err := m.getKey(i)
-	if err != nil {
-		return nil, err
-	}
-	switch pub := siteCert.PublicKey.(type) {
-	case *rsa.PublicKey:
-		prv, ok := key.(*rsa.PrivateKey)
-		if !ok || pub.N.Cmp(prv.N) != 0 {
-			info.Expiry = time.Time{}
-			info.Message = "public key doesn't match private key"
-			return info, nil
-		}
-	case *ecdsa.PublicKey:
-		prv, ok := key.(*ecdsa.PrivateKey)
-		if !ok || pub.X.Cmp(prv.X) != 0 || pub.Y.Cmp(prv.Y) != 0 {
-			info.Expiry = time.Time{}
-			info.Message = "public key doesn't match private key"
-			return info, nil
-		}
-	default:
-		return nil, errUnknownKeyType
-	}
-
-	intermediates := x509.NewCertPool()
-	for _, caCertDER := range chainDER[1:] {
-		caCert, err := x509.ParseCertificate(caCertDER)
-		if err != nil {
-			return nil, err
-		}
-		intermediates.AddCert(caCert)
-	}
-	opts := x509.VerifyOptions{
-		DNSName:       domain,
-		Roots:         m.roots,
-		Intermediates: intermediates,
-		CurrentTime:   now,
-	}
-	_, err = siteCert.Verify(opts)
-	if err != nil {
-		info.Message = err.Error()
-		return info, nil
-	}
-
-	info.IsValid = true
-	info.Message = "issued by " + siteCert.Issuer.String()
-
-	return info, nil
-}
-
 // InstallDummyCertificate installs a self-signed dummy certificate for
 // site number `i`.
 func (m *Manager) InstallDummyCertificate(i int, expiry time.Duration) error {
 	domain := m.config.Sites[i].Domain
 	now := time.Now()
 
-	privKey, err := m.getKey(i)
+	privKey, err := m.getKey(domain)
 	if err != nil {
 		return err
 	}
@@ -257,12 +264,12 @@ func (m *Manager) RenewCertificate(i int) error {
 	return writePEM(certPath, chainDER, "CERTIFICATE", 0644)
 }
 
-func (m *Manager) getKey(i int) (crypto.Signer, error) {
-	if key, ok := m.siteKeys[i]; ok {
+func (m *Manager) getKey(domain string) (crypto.Signer, error) {
+	if key, ok := m.siteKeys[domain]; ok {
 		return key, nil
 	}
 
-	keyPath, err := m.config.GetKeyFileName(i)
+	keyPath, err := m.config.GetKeyFileName(domain)
 	if err != nil {
 		return nil, err
 	}
@@ -272,12 +279,12 @@ func (m *Manager) getKey(i int) (crypto.Signer, error) {
 		return nil, err
 	}
 
-	m.siteKeys[i] = key
+	m.siteKeys[domain] = key
 	return key, nil
 }
 
 func (m *Manager) getCSR(i int) ([]byte, error) {
-	key, err := m.getKey(i)
+	key, err := m.getKey(m.config.Sites[i].Domain)
 	if err != nil {
 		return nil, err
 	}
@@ -329,13 +336,90 @@ func (m *Manager) getAccountKey() (crypto.Signer, error) {
 		return m.accountKey, nil
 	}
 
-	keyName := filepath.Join(m.config.AccountDir, "account.key")
+	keyName := filepath.Join(m.config.AccountDir, accountKeyName)
 	accountKey, err := loadOrCreatePrivateKey(keyName)
 	if err != nil {
 		return nil, err
 	}
 	m.accountKey = accountKey
 	return accountKey, nil
+}
+
+func (m *Manager) checkCert(now time.Time, chainDER [][]byte, i int) (*Info, error) {
+	domain := m.config.Sites[i].Domain
+	info := &Info{
+		Domain: domain,
+	}
+
+	if chainDER == nil {
+		info.IsMissing = true
+		info.Message = "missing"
+		return info, nil
+	}
+
+	siteCertDER := chainDER[0]
+	siteCert, err := x509.ParseCertificate(siteCertDER)
+	if err != nil {
+		return nil, err
+	}
+	if now.Before(siteCert.NotBefore) {
+		info.Message = "not valid until " + siteCert.NotBefore.String()
+		return info, nil
+	}
+	info.Expiry = siteCert.NotAfter
+	if now.After(siteCert.NotAfter) {
+		info.Message = "expired on " + siteCert.NotAfter.String()
+		return info, nil
+	}
+
+	// Ensure the siteCert corresponds to the correct private key.
+	key, err := m.getKey(m.config.Sites[i].Domain)
+	if err != nil {
+		return nil, err
+	}
+	switch pub := siteCert.PublicKey.(type) {
+	case *rsa.PublicKey:
+		prv, ok := key.(*rsa.PrivateKey)
+		if !ok || pub.N.Cmp(prv.N) != 0 {
+			info.Expiry = time.Time{}
+			info.Message = "public key doesn't match private key"
+			return info, nil
+		}
+	case *ecdsa.PublicKey:
+		prv, ok := key.(*ecdsa.PrivateKey)
+		if !ok || pub.X.Cmp(prv.X) != 0 || pub.Y.Cmp(prv.Y) != 0 {
+			info.Expiry = time.Time{}
+			info.Message = "public key doesn't match private key"
+			return info, nil
+		}
+	default:
+		return nil, errUnknownKeyType
+	}
+
+	intermediates := x509.NewCertPool()
+	for _, caCertDER := range chainDER[1:] {
+		caCert, err := x509.ParseCertificate(caCertDER)
+		if err != nil {
+			return nil, err
+		}
+		intermediates.AddCert(caCert)
+	}
+	opts := x509.VerifyOptions{
+		DNSName:       domain,
+		Roots:         m.roots,
+		Intermediates: intermediates,
+		CurrentTime:   now,
+	}
+	_, err = siteCert.Verify(opts)
+	if err != nil {
+		info.Message = err.Error()
+		return info, nil
+	}
+
+	info.IsValid = true
+	info.Message = "issued by " + siteCert.Issuer.String()
+
+	return info, nil
 }
 
 func (m *Manager) getClient(ctx context.Context) (*acme.Client, error) {

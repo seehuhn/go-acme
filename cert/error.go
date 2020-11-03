@@ -19,6 +19,10 @@ package cert
 import "errors"
 
 var (
+	// ErrNoDomain indicates that a domain cannot be found in the configuration
+	// file.
+	ErrNoDomain = errors.New("domain not found")
+
 	errInvalidKey     = errors.New("invalid key")
 	errNoChallenge    = errors.New("no http-01 challenge offered")
 	errPublicPrivate  = errors.New("public key doesn't match private key")

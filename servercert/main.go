@@ -150,7 +150,8 @@ func Renew(m *cert.Manager) error {
 func main() {
 	flag.Parse()
 
-	config, err := readConfig("config.yml")
+	configFileName := "config.yml"
+	config, err := readConfig(configFileName)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -165,8 +166,8 @@ func main() {
 	cmd := flag.Arg(0)
 
 	switch cmd {
-	case "ignore":
-		// pass
+	case "check":
+		err = m.CheckConfig(configFileName)
 	case "list":
 		err = List(m)
 	case "renew":
