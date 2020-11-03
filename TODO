@@ -1,0 +1,4 @@
+- remove SiteRoot
+- change AccountDir to AccountKey
+- allow for more than one domain per certificate
+- add -D (debug) command line option
