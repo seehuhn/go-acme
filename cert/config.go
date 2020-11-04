@@ -21,13 +21,12 @@ import (
 	"text/template"
 )
 
-// Config contains the data which describes the certificate management
-// framework for a single web server, potentially serving more than one site.
+// Config describes the certificate data for a web server, potentially serving
+// more than one site.
 type Config struct {
 	AccountDir   string
 	ContactEmail string `yaml:",omitempty"`
 
-	SiteRoot            string `yaml:",omitempty"`
 	DefaultSiteKeyFile  string `yaml:",omitempty"`
 	DefaultSiteCertFile string `yaml:",omitempty"`
 	DefaultWebRoot      string `yaml:",omitempty"`
@@ -39,8 +38,7 @@ type Config struct {
 	webRootTmpl  *template.Template
 }
 
-// ConfigSite contains the data which describes the certificate management
-// framework for a single domain.
+// ConfigSite describes the certificate data for a single domain.
 type ConfigSite struct {
 	Name     string
 	Domain   string

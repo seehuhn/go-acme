@@ -1,4 +1,6 @@
-- remove SiteRoot
-- change AccountDir to AccountKey
+- in AcceptTOS, keep track of which terms have been agreed to
 - allow for more than one domain per certificate
-- add -D (debug) command line option
+- add a new "account" command
+- keep track of how much of the rate limit allowance we have used
+- change AccountDir to AccountKey??
+- implement a backup command?

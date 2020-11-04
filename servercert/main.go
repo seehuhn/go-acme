@@ -32,6 +32,14 @@ import (
 	"seehuhn.de/go/acme/cert"
 )
 
+var cmds = map[string]func(*cert.Manager, ...string) error{
+	"check":       CmdCheck,
+	"list":        CmdList,
+	"renew":       CmdRenew,
+	"self-signed": CmdSelfSigned,
+	"version":     CmdVersion,
+}
+
 var configFileName = flag.String("c", "config.yml",
 	"name of the configuration file")
 
@@ -220,13 +228,14 @@ func CmdSelfSigned(m *cert.Manager, args ...string) error {
 	return nil
 }
 
+func CmdVersion(m *cert.Manager, args ...string) error {
+	fmt.Println(cert.PackageVersion)
+	return nil
+}
+
 func main() {
-	cmds := map[string]func(*cert.Manager, ...string) error{
-		"check":       CmdCheck,
-		"list":        CmdList,
-		"renew":       CmdRenew,
-		"self-signed": CmdSelfSigned,
-	}
+	debug := flag.Bool("D", true,
+		"debug mode (relaxed rate limits, but invalid certifiates)")
 
 	flag.Usage = func() {
 		name := filepath.Base(os.Args[0])
@@ -249,12 +258,16 @@ func main() {
 		os.Exit(0)
 	}
 
+	if *debug {
+		fmt.Fprint(os.Stderr, "\nRUNNING IN DEBUG MODE\n\n")
+	}
+
 	config, err := readConfig(*configFileName)
 	if err != nil {
 		log.Fatal(err)
 	}
 
-	m, err := cert.NewManager(config, true)
+	m, err := cert.NewManager(config, *debug)
 	if err != nil {
 		log.Fatal(err)
 	}
