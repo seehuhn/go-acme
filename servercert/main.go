@@ -37,7 +37,6 @@ var cmds = map[string]func(*cert.Manager, ...string) error{
 	"list":        CmdList,
 	"renew":       CmdRenew,
 	"self-signed": CmdSelfSigned,
-	"version":     CmdVersion,
 }
 
 var configFileName = flag.String("c", "config.yml",
@@ -167,7 +166,10 @@ func CmdRenew(m *cert.Manager, args ...string) error {
 	}
 	for domain, isGood := range doRenew {
 		if !isGood {
-			return &cert.DomainError{Domain: domain}
+			return &cert.DomainError{
+				Domain:  domain,
+				Problem: "not in configuration file",
+			}
 		}
 	}
 
@@ -228,14 +230,11 @@ func CmdSelfSigned(m *cert.Manager, args ...string) error {
 	return nil
 }
 
-func CmdVersion(m *cert.Manager, args ...string) error {
-	fmt.Println(cert.PackageVersion)
-	return nil
-}
-
 func main() {
 	debug := flag.Bool("D", true,
 		"debug mode (relaxed rate limits, but invalid certifiates)")
+	version := flag.Bool("version", false,
+		"output version information and exit")
 
 	flag.Usage = func() {
 		name := filepath.Base(os.Args[0])
@@ -253,6 +252,10 @@ func main() {
 	}
 	flag.Parse()
 	args := flag.Args()
+	if *version {
+		fmt.Println(cert.PackageVersion)
+		os.Exit(0)
+	}
 	if len(args) == 0 {
 		flag.Usage()
 		os.Exit(0)

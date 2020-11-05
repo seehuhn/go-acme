@@ -108,12 +108,17 @@ func (m *Manager) CheckConfig() error {
 		domain := site.Domain
 		if seen[domain] {
 			return &FileError{
-				Problem: "contains no sites",
+				Problem: "duplicate domain",
 			}
 		}
 		seen[domain] = true
 
-		err = m.checkOneSite(domain)
+		_, err := m.getKey(domain)
+		if err != nil {
+			return err
+		}
+
+		err = m.TestChallenge(domain)
 		if err != nil {
 			return err
 		}
@@ -122,14 +127,11 @@ func (m *Manager) CheckConfig() error {
 	return nil
 }
 
-func (m *Manager) checkOneSite(domain string) error {
-	_, err := m.getKey(domain)
-	if err != nil {
-		return err
-	}
-
+// TestChallenge tries to publish and read back a challenge response file for
+// the given domain.
+func (m *Manager) TestChallenge(domain string) error {
 	token := make([]byte, 8)
-	_, err = io.ReadFull(rand.Reader, token)
+	_, err := io.ReadFull(rand.Reader, token)
 	if err != nil {
 		return err
 	}
@@ -137,23 +139,41 @@ func (m *Manager) checkOneSite(domain string) error {
 	urlPath := path.Join(".well-known/acme-challenge", "jvcert-"+tokenStr)
 	fname, err := m.publishFile(domain, urlPath, token)
 	if err != nil {
-		return err
+		return &DomainError{
+			Domain:  domain,
+			Problem: "cannot publish file",
+			Err:     err,
+		}
 	}
 	defer os.Remove(fname)
 
 	resp, err := http.Get("http://" + domain + "/" + urlPath)
-	if err != nil {
-		return err
+	if resp != nil {
+		defer resp.Body.Close()
 	}
-	defer resp.Body.Close()
+	if err != nil || resp.StatusCode != 200 {
+		if err == nil {
+			err = errors.New(resp.Status)
+		}
+		return &DomainError{
+			Domain:  domain,
+			Problem: "cannot get challenge response via http",
+			Err:     err,
+		}
+	}
 	body, err := ioutil.ReadAll(resp.Body)
 	if err != nil {
-		return err
+		return &DomainError{
+			Domain:  domain,
+			Problem: "cannot read challenge response body",
+			Err:     err,
+		}
 	}
 
 	if bytes.Compare(token, body) != 0 {
-		return &FileError{
-			Problem: "cannot publish challenges for " + domain,
+		return &DomainError{
+			Domain:  domain,
+			Problem: "challenge response body corrupted",
 		}
 	}
 
@@ -225,7 +245,10 @@ func (m *Manager) InstallSelfSigned(domain string, expiry time.Duration) error {
 // RenewCertificate requests and installs a new certificate for the given
 // domain.
 func (m *Manager) RenewCertificate(domain string) error {
-	now := time.Now()
+	err := m.TestChallenge(domain)
+	if err != nil {
+		return err
+	}
 
 	csr, err := m.getCSR(domain)
 	if err != nil {
@@ -246,7 +269,7 @@ func (m *Manager) RenewCertificate(domain string) error {
 	if err != nil {
 		return err
 	}
-	info, err := m.checkCert(now, chainDER, domain)
+	info, err := m.checkCert(time.Now(), chainDER, domain)
 	if err != nil {
 		return err
 	}

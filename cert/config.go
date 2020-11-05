@@ -127,7 +127,10 @@ func (c *Config) getDomainIndex(domain string) (int, error) {
 
 	idx, ok := c.domainIdx[domain]
 	if !ok {
-		return -1, &DomainError{Domain: domain}
+		return -1, &DomainError{
+			Domain:  domain,
+			Problem: "not in configuration file",
+		}
 	}
 	return idx, nil
 }
