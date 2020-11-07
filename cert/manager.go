@@ -190,9 +190,9 @@ type Info struct {
 	Message   string
 }
 
-// GetCertInfo returns information about all certificates managed by `m`.
-func (m *Manager) GetCertInfo(domain string) (*Info, error) {
-	certFileName, err := m.config.GetCertFileName(domain)
+// GetCertInfo returns information about a certificate managed by m.
+func (m *Manager) GetCertInfo(domains []string) (*Info, error) {
+	certFileName, err := m.config.GetCertFileName(domains[0])
 	if err != nil {
 		return nil, err
 	}
@@ -201,7 +201,7 @@ func (m *Manager) GetCertInfo(domain string) (*Info, error) {
 		return nil, err
 	}
 
-	info, err := m.checkCert(time.Now(), chainDER, domain)
+	info, err := m.checkCert(time.Now(), chainDER, domains)
 	if err != nil {
 		return nil, err
 	}
@@ -243,14 +243,16 @@ func (m *Manager) InstallSelfSigned(domain string, expiry time.Duration) error {
 }
 
 // RenewCertificate requests and installs a new certificate for the given
-// domain.
-func (m *Manager) RenewCertificate(domain string) error {
-	err := m.TestChallenge(domain)
-	if err != nil {
-		return err
+// set of domains.
+func (m *Manager) RenewCertificate(domains []string) error {
+	for _, domain := range domains {
+		err := m.TestChallenge(domain)
+		if err != nil {
+			return err
+		}
 	}
 
-	csr, err := m.getCSR(domain)
+	csr, err := m.getCSR(domains)
 	if err != nil {
 		return err
 	}
@@ -261,7 +263,7 @@ func (m *Manager) RenewCertificate(domain string) error {
 	if err != nil {
 		return err
 	}
-	order, err := m.getOrder(ctx, client, domain)
+	order, err := m.getOrder(ctx, client, domains)
 	if err != nil {
 		return err
 	}
@@ -269,7 +271,7 @@ func (m *Manager) RenewCertificate(domain string) error {
 	if err != nil {
 		return err
 	}
-	info, err := m.checkCert(time.Now(), chainDER, domain)
+	info, err := m.checkCert(time.Now(), chainDER, domains)
 	if err != nil {
 		return err
 	}
@@ -277,7 +279,7 @@ func (m *Manager) RenewCertificate(domain string) error {
 		return errors.New("received invalid certificate: " + info.Message)
 	}
 
-	certPath, err := m.config.GetCertFileName(domain)
+	certPath, err := m.config.GetCertFileName(domains[0])
 	if err != nil {
 		return err
 	}
@@ -303,15 +305,15 @@ func (m *Manager) getKey(domain string) (crypto.Signer, error) {
 	return key, nil
 }
 
-func (m *Manager) getCSR(domain string) ([]byte, error) {
-	key, err := m.getKey(domain)
+func (m *Manager) getCSR(domains []string) ([]byte, error) {
+	key, err := m.getKey(domains[0])
 	if err != nil {
 		return nil, err
 	}
 
 	req := &x509.CertificateRequest{
-		Subject: pkix.Name{CommonName: domain},
-		// DNSNames: []string{},
+		Subject:  pkix.Name{CommonName: domains[0]},
+		DNSNames: domains,
 		// ExtraExtensions: ext,
 	}
 	return x509.CreateCertificateRequest(rand.Reader, req, key)
@@ -360,12 +362,12 @@ func (m *Manager) getAccountKey() (crypto.Signer, error) {
 	return accountKey, nil
 }
 
-func (m *Manager) checkCert(now time.Time, chainDER [][]byte, domain string) (*Info, error) {
+func (m *Manager) checkCert(now time.Time, chainDER [][]byte, domains []string) (*Info, error) {
 	info := &Info{
-		Domain: domain,
+		Domain: domains[0],
 	}
 
-	if chainDER == nil {
+	if len(chainDER) == 0 {
 		info.IsMissing = true
 		info.Message = "missing"
 		return info, nil
@@ -387,7 +389,7 @@ func (m *Manager) checkCert(now time.Time, chainDER [][]byte, domain string) (*I
 	}
 
 	// Ensure the siteCert corresponds to the correct private key.
-	key, err := m.getKey(domain)
+	key, err := m.getKey(domains[0])
 	if err != nil {
 		return nil, err
 	}
@@ -418,16 +420,18 @@ func (m *Manager) checkCert(now time.Time, chainDER [][]byte, domain string) (*I
 		}
 		intermediates.AddCert(caCert)
 	}
-	opts := x509.VerifyOptions{
-		DNSName:       domain,
-		Roots:         m.roots,
-		Intermediates: intermediates,
-		CurrentTime:   now,
-	}
-	_, err = siteCert.Verify(opts)
-	if err != nil {
-		info.Message = err.Error()
-		return info, nil
+	for _, domain := range domains {
+		opts := x509.VerifyOptions{
+			DNSName:       domain,
+			Roots:         m.roots,
+			Intermediates: intermediates,
+			CurrentTime:   now,
+		}
+		_, err = siteCert.Verify(opts)
+		if err != nil {
+			info.Message = err.Error()
+			return info, nil
+		}
 	}
 
 	info.IsValid = true
@@ -459,8 +463,8 @@ func (m *Manager) getClient(ctx context.Context) (*acme.Client, error) {
 }
 
 func (m *Manager) getOrder(ctx context.Context, client *acme.Client,
-	domain string) (*acme.Order, error) {
-	order, err := client.AuthorizeOrder(ctx, acme.DomainIDs(domain))
+	domains []string) (*acme.Order, error) {
+	order, err := client.AuthorizeOrder(ctx, acme.DomainIDs(domains...))
 	if err != nil {
 		return nil, err
 	}

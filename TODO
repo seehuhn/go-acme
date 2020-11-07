@@ -1,5 +1,5 @@
-- keep track of how much of the rate limit allowance we have used
 - allow for more than one domain per certificate
+- keep track of how much of the rate limit allowance we have used
 - don't abort renewals, when individual sites fail
 
 - keep a log of activities, including all the rate limited ones
@@ -8,3 +8,5 @@
 - in AcceptTOS, keep track of which terms have been agreed to
 - implement a backup command?
 - add a new "account" command?
+- in the "list" command, say when a certificate is self-signed
+- consider https://letsencrypt.org/2020/11/06/own-two-feet.html

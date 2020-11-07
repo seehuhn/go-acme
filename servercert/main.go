@@ -126,7 +126,7 @@ func CmdList(m *cert.Manager, args ...string) error {
 	T := &table{}
 	T.SetHeader("domain", "valid", "expiry time", "comment")
 	for _, domain := range domains {
-		info, err := m.GetCertInfo(domain)
+		info, err := m.GetCertInfo([]string{domain})
 		if err != nil {
 			return err
 		}
@@ -148,7 +148,8 @@ func CmdList(m *cert.Manager, args ...string) error {
 	return nil
 }
 
-// CmdRenew all certificates which are not valid for at least 7 more days.
+// CmdRenew renews all certificates which are not valid for at least 7 more
+// days.
 func CmdRenew(m *cert.Manager, args ...string) error {
 	ff := flag.NewFlagSet("renew", flag.ExitOnError)
 	force := ff.Bool("f", false, "renew even if the old cert is still good")
@@ -175,7 +176,7 @@ func CmdRenew(m *cert.Manager, args ...string) error {
 
 	deadline := time.Now().Add(7 * 24 * time.Hour)
 	for domain := range doRenew {
-		info, err := m.GetCertInfo(domain)
+		info, err := m.GetCertInfo([]string{domain})
 		if err != nil {
 			return err
 		}
@@ -192,7 +193,7 @@ func CmdRenew(m *cert.Manager, args ...string) error {
 			continue
 		}
 		fmt.Println("renewing", domain)
-		err = m.RenewCertificate(domain)
+		err = m.RenewCertificate([]string{domain})
 		if err != nil {
 			return err
 		}
@@ -212,7 +213,7 @@ func CmdSelfSigned(m *cert.Manager, args ...string) error {
 	}
 	for _, domain := range domains {
 		if !*force {
-			info, err := m.GetCertInfo(domain)
+			info, err := m.GetCertInfo([]string{domain})
 			if err != nil {
 				return err
 			}
