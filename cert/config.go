@@ -22,7 +22,7 @@ import (
 )
 
 // Config describes the certificate data for a web server, potentially serving
-// more than one site.
+// more than one domain.
 type Config struct {
 	AccountDir   string
 	ContactEmail string `yaml:",omitempty"`
@@ -32,7 +32,7 @@ type Config struct {
 	DefaultWebRoot      string `yaml:",omitempty"`
 	Sites               []*ConfigSite
 
-	domainIdx    map[string]int
+	domainSite   map[string]*ConfigSite
 	keyFileTmpl  *template.Template
 	certFileTmpl *template.Template
 	webRootTmpl  *template.Template
@@ -42,20 +42,46 @@ type Config struct {
 type ConfigSite struct {
 	Name     string
 	Domain   string
+	UseKeyOf string `yaml:",omitempty"`
 	KeyFile  string `yaml:",omitempty"`
 	CertFile string `yaml:",omitempty"`
 	WebRoot  string `yaml:",omitempty"`
 }
 
+func (c *Config) groups() error {
+	next := make(map[string]string)
+	dd := make(map[string][]string)
+	for _, site := range c.Sites {
+		domain := site.Domain
+		next[domain] = site.UseKeyOf
+		dd[domain] = []string{domain}
+
+		a := site.UseKeyOf != ""
+		b := site.KeyFile != "" || site.CertFile != ""
+		if a && b {
+			return &DomainError{
+				Domain:  domain,
+				Problem: "UseKeyOf and KeyFile/CertFile are mutually exclusive",
+			}
+		}
+	}
+	// TODO(voss): ...
+	return nil
+}
+
 // GetKeyFileName returns the file name for the private key of `domain`.
 func (c *Config) GetKeyFileName(domain string) (string, error) {
-	i, err := c.getDomainIndex(domain)
+	site, err := c.getDomainSite(domain)
 	if err != nil {
 		return "", err
 	}
 
-	if c.Sites[i].KeyFile != "" {
-		return c.Sites[i].KeyFile, nil
+	if site.UseKeyOf != "" {
+		return c.GetKeyFileName(site.UseKeyOf)
+	}
+
+	if site.KeyFile != "" {
+		return site.KeyFile, nil
 	}
 
 	if c.keyFileTmpl == nil {
@@ -67,18 +93,22 @@ func (c *Config) GetKeyFileName(domain string) (string, error) {
 		c.keyFileTmpl = tmpl
 	}
 
-	return c.runTemplate(c.keyFileTmpl, i)
+	return c.runTemplate(c.keyFileTmpl, site)
 }
 
 // GetCertFileName returns the file name for the certificate of site `i`.
 func (c *Config) GetCertFileName(domain string) (string, error) {
-	i, err := c.getDomainIndex(domain)
+	site, err := c.getDomainSite(domain)
 	if err != nil {
 		return "", err
 	}
 
-	if c.Sites[i].CertFile != "" {
-		return c.Sites[i].CertFile, nil
+	if site.UseKeyOf != "" {
+		return c.GetCertFileName(site.UseKeyOf)
+	}
+
+	if site.CertFile != "" {
+		return site.CertFile, nil
 	}
 
 	if c.certFileTmpl == nil {
@@ -90,19 +120,19 @@ func (c *Config) GetCertFileName(domain string) (string, error) {
 		c.certFileTmpl = tmpl
 	}
 
-	return c.runTemplate(c.certFileTmpl, i)
+	return c.runTemplate(c.certFileTmpl, site)
 }
 
 // GetWebRoot returns the path of directory which corresponds to the
 // root of the file tree served by site `i`.
 func (c *Config) GetWebRoot(domain string) (string, error) {
-	i, err := c.getDomainIndex(domain)
+	site, err := c.getDomainSite(domain)
 	if err != nil {
 		return "", err
 	}
 
-	if c.Sites[i].WebRoot != "" {
-		return c.Sites[i].WebRoot, nil
+	if site.WebRoot != "" {
+		return site.WebRoot, nil
 	}
 
 	if c.webRootTmpl == nil {
@@ -114,20 +144,20 @@ func (c *Config) GetWebRoot(domain string) (string, error) {
 		c.webRootTmpl = tmpl
 	}
 
-	return c.runTemplate(c.webRootTmpl, i)
+	return c.runTemplate(c.webRootTmpl, site)
 }
 
-func (c *Config) getDomainIndex(domain string) (int, error) {
-	if c.domainIdx == nil {
-		c.domainIdx = make(map[string]int)
+func (c *Config) getDomainSite(domain string) (*ConfigSite, error) {
+	if c.domainSite == nil {
+		c.domainSite = make(map[string]*ConfigSite)
 		for i, site := range c.Sites {
-			c.domainIdx[site.Domain] = i
+			c.domainSite[site.Domain] = c.Sites[i]
 		}
 	}
 
-	idx, ok := c.domainIdx[domain]
+	idx, ok := c.domainSite[domain]
 	if !ok {
-		return -1, &DomainError{
+		return nil, &DomainError{
 			Domain:  domain,
 			Problem: "not in configuration file",
 		}
@@ -135,11 +165,11 @@ func (c *Config) getDomainIndex(domain string) (int, error) {
 	return idx, nil
 }
 
-func (c *Config) runTemplate(tmpl *template.Template, i int) (string, error) {
+func (c *Config) runTemplate(tmpl *template.Template, site *ConfigSite) (string, error) {
 	buf := &bytes.Buffer{}
 	err := tmpl.Execute(buf, map[string]interface{}{
 		"Config": c,
-		"Site":   c.Sites[i],
+		"Site":   site,
 	})
 	if err != nil {
 		return "", err
