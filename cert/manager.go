@@ -17,7 +17,6 @@
 package cert
 
 import (
-	"bytes"
 	"context"
 	"crypto"
 	"crypto/ecdsa"
@@ -25,13 +24,8 @@ import (
 	"crypto/rsa"
 	"crypto/x509"
 	"crypto/x509/pkix"
-	"encoding/base64"
 	"errors"
-	"io"
-	"io/ioutil"
-	"net/http"
 	"os"
-	"path"
 	"path/filepath"
 	"text/template"
 	"time"
@@ -73,59 +67,6 @@ func NewManager(config *Config, debug bool) (*Manager, error) {
 
 		siteKeys: make(map[string]crypto.Signer),
 	}, nil
-}
-
-// TestChallenge tries to publish and read back a challenge response file for
-// the given domain.
-func (m *Manager) TestChallenge(domain string) error {
-	token := make([]byte, 8)
-	_, err := io.ReadFull(rand.Reader, token)
-	if err != nil {
-		return err
-	}
-	tokenStr := base64.RawURLEncoding.EncodeToString(token)
-	urlPath := path.Join(".well-known/acme-challenge", "jvcert-"+tokenStr)
-	fname, err := m.publishFile(domain, urlPath, token)
-	if err != nil {
-		return &DomainError{
-			Domain:  domain,
-			Problem: "cannot publish file",
-			Err:     err,
-		}
-	}
-	defer os.Remove(fname)
-
-	resp, err := http.Get("http://" + domain + "/" + urlPath)
-	if resp != nil {
-		defer resp.Body.Close()
-	}
-	if err != nil || resp.StatusCode != 200 {
-		if err == nil {
-			err = errors.New(resp.Status)
-		}
-		return &DomainError{
-			Domain:  domain,
-			Problem: "cannot get challenge response via http",
-			Err:     err,
-		}
-	}
-	body, err := ioutil.ReadAll(resp.Body)
-	if err != nil {
-		return &DomainError{
-			Domain:  domain,
-			Problem: "cannot read challenge response body",
-			Err:     err,
-		}
-	}
-
-	if bytes.Compare(token, body) != 0 {
-		return &DomainError{
-			Domain:  domain,
-			Problem: "challenge response body corrupted",
-		}
-	}
-
-	return nil
 }
 
 // Info contains information about a single certificate installed on the
@@ -193,8 +134,10 @@ func (m *Manager) InstallSelfSigned(domain string, expiry time.Duration) error {
 // RenewCertificate requests and installs a new certificate for the given
 // set of domains.
 func (m *Manager) RenewCertificate(domains []string) error {
+	// Make sure we can respond to challenges before using any
+	// of our allowance with the ACME provider.
 	for _, domain := range domains {
-		err := m.TestChallenge(domain)
+		err := m.config.TestChallenge(domain)
 		if err != nil {
 			return err
 		}
@@ -265,35 +208,6 @@ func (m *Manager) getCSR(domains []string) ([]byte, error) {
 		// ExtraExtensions: ext,
 	}
 	return x509.CreateCertificateRequest(rand.Reader, req, key)
-}
-
-func (m *Manager) getWebRoot(domain string) (string, error) {
-	return m.config.GetWebRoot(domain)
-}
-
-// Put a file with the given contents on the web server.
-// Returns the created file name (to be used when later removing the file)
-// and an error, if any.
-func (m *Manager) publishFile(domain, path string, contents []byte) (string, error) {
-	root, err := m.getWebRoot(domain)
-	if err != nil {
-		return "", err
-	}
-	fname := filepath.Join(root, filepath.Clean(filepath.FromSlash(path)))
-
-	err = os.MkdirAll(filepath.Dir(fname), 0755)
-	if err != nil {
-		return "", err
-	}
-
-	fd, err := os.Create(fname)
-	if err != nil {
-		return "", err
-	}
-	defer fd.Close()
-
-	_, err = fd.Write(contents)
-	return fname, err
 }
 
 func (m *Manager) getAccountKey() (crypto.Signer, error) {
@@ -368,17 +282,20 @@ func (m *Manager) checkCert(now time.Time, chainDER [][]byte, domains []string) 
 		}
 		intermediates.AddCert(caCert)
 	}
+	opts := x509.VerifyOptions{
+		Roots:         m.roots,
+		Intermediates: intermediates,
+		CurrentTime:   now,
+	}
+	_, err = siteCert.Verify(opts)
+	if err != nil {
+		info.Message = err.Error()
+		return info, nil
+	}
 	for _, domain := range domains {
-		opts := x509.VerifyOptions{
-			DNSName:       domain,
-			Roots:         m.roots,
-			Intermediates: intermediates,
-			CurrentTime:   now,
-		}
-		_, err = siteCert.Verify(opts)
+		err = siteCert.VerifyHostname(domain)
 		if err != nil {
-			info.Message = err.Error()
-			return info, nil
+			return nil, err
 		}
 	}
 
@@ -459,7 +376,7 @@ func (m *Manager) authorizeOne(ctx context.Context, client *acme.Client, authzUR
 		return err
 	}
 
-	fname, err := m.publishFile(domain, path, []byte(contents))
+	fname, err := m.config.PublishFile(domain, path, []byte(contents))
 	if fname != "" {
 		defer os.Remove(fname)
 	}

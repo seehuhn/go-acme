@@ -37,17 +37,6 @@ func isDir(dirName string) error {
 	return nil
 }
 
-// Make sure dirName exists and is a directory.  Create a new directory if
-// needed.
-func createDirIfNeeded(dirName string, perm os.FileMode) error {
-	// TODO(voss): do we need/want this function?
-	err := isDir(dirName)
-	if os.IsNotExist(err) {
-		return os.MkdirAll(dirName, perm)
-	}
-	return err
-}
-
 // Attempt to parse the given private key DER block. OpenSSL 0.9.8 generates
 // PKCS#1 private keys by default, while OpenSSL 1.0.0 generates PKCS#8 keys.
 // OpenSSL ecparam generates SEC1 EC private keys for ECDSA. We try all three.
@@ -64,14 +53,14 @@ func parsePrivateKey(der []byte) (crypto.Signer, error) {
 		case *ecdsa.PrivateKey:
 			return key, nil
 		default:
-			return nil, errors.New("acme/autocert: unknown private key type in PKCS#8 wrapping")
+			return nil, errors.New("acme/cert: unknown private key type in PKCS#8 wrapping")
 		}
 	}
 	if key, err := x509.ParseECPrivateKey(der); err == nil {
 		return key, nil
 	}
 
-	return nil, errors.New("acme/autocert: failed to parse private key")
+	return nil, errors.New("acme/autoc: failed to parse private key")
 }
 
 func writePEM(fname string, chain [][]byte, Type string, perm os.FileMode) error {

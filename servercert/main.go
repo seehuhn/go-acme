@@ -30,6 +30,7 @@ import (
 )
 
 var cmds = map[string]func(*cert.Config, *cert.Manager, ...string) error{
+	"certs":       CmdCerts,
 	"check":       CmdCheck,
 	"list":        CmdList,
 	"renew":       CmdRenew,
@@ -56,16 +57,19 @@ func readConfig(fname string) (*cert.Config, error) {
 	return config, nil
 }
 
-type dirStatus int
-
-func isFile(fname string) (os.FileMode, error) {
-	stat, err := os.Stat(fname)
-	if os.IsNotExist(err) {
-		return 0, nil
-	} else if err != nil {
-		return 0, err
+func CmdCerts(c *cert.Config, m *cert.Manager, args ...string) error {
+	certs, err := c.Certificates()
+	if err != nil {
+		return err
 	}
-	return stat.Mode(), nil
+
+	for _, domains := range certs {
+		fmt.Println(domains[0])
+		for _, domain := range domains[1:] {
+			fmt.Println("  " + domain)
+		}
+	}
+	return nil
 }
 
 // CmdCheck checks the data from the configuration file for correctness and
@@ -124,17 +128,37 @@ func CmdCheck(c *cert.Config, m *cert.Manager, args ...string) error {
 		}
 		seen[domain] = true
 
-		challenge := "-"
 		key := "-"
 		cert := "-"
+		challenge := "-"
 		msg := ""
 
+		err = c.TestChallenge(domain)
+		if err != nil {
+			challenge = "error"
+			msg = "cannot respond to challenges"
+			root, e2 := c.GetWebRoot(domain)
+			if e2 != nil {
+				return e2
+			}
+			errors = append(errors,
+				msg+" for "+domain+":\n"+
+					"  trying to publish at "+root+"\n"+
+					"  "+err.Error())
+		} else {
+			challenge = "ok"
+		}
+
 		if site.UseKeyOf != "" {
+			var m2 string
 			if site.KeyFile != "" || site.CertFile != "" {
-				msg = "uses both usekeyof and keyfile/certfile"
-				errors = append(errors, domain+" "+msg)
+				m2 = "uses both usekeyof and keyfile/certfile"
+				errors = append(errors, domain+" "+m2)
 			} else {
-				msg = "shares key/cert with " + site.UseKeyOf
+				m2 = "shares key/cert with " + site.UseKeyOf
+			}
+			if msg == "" {
+				msg = m2
 			}
 			T.AddRow(domain, key, cert, challenge, msg)
 			continue
@@ -199,25 +223,6 @@ func CmdCheck(c *cert.Config, m *cert.Manager, args ...string) error {
 				msg = m2
 			}
 		}
-
-		err = m.TestChallenge(domain)
-		if err != nil {
-			challenge = "error"
-			m2 := "cannot respond to challenges"
-			if msg == "" {
-				msg = m2
-			}
-			root, e2 := c.GetWebRoot(domain)
-			if e2 != nil {
-				return e2
-			}
-			errors = append(errors,
-				m2+" for "+domain+":\n"+
-					"  trying to publish at "+root+"\n"+
-					"  "+err.Error())
-		} else {
-			challenge = "ok"
-		}
 		T.AddRow(domain, key, cert, challenge, msg)
 	}
 	T.Show()
@@ -243,7 +248,8 @@ func CmdCheck(c *cert.Config, m *cert.Manager, args ...string) error {
 	return err
 }
 
-// CmdList prints a table with information about all known certificates to stdout.
+// CmdList prints a table with information about all known certificates to
+// stdout.
 func CmdList(c *cert.Config, m *cert.Manager, args ...string) error {
 	ff := flag.NewFlagSet("list", flag.ExitOnError)
 	ff.Parse(args)

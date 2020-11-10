@@ -18,6 +18,15 @@ package cert
 
 import (
 	"bytes"
+	"crypto/rand"
+	"encoding/base64"
+	"errors"
+	"io"
+	"io/ioutil"
+	"net/http"
+	"os"
+	"path"
+	"path/filepath"
 	"strings"
 	"text/template"
 )
@@ -57,12 +66,12 @@ func (c *Config) Domains() []string {
 	return dd
 }
 
-// CertificateDomains returns a list of certificates the Config describes. Each
+// Certificates returns a list of certificates the Config describes. Each
 // elements of the returned slice is a list of domain names to be used for a
 // single certificate.  The first domain name is the one which holds
 // information about the key and certificate file names.
-func (c *Config) CertificateDomains() (map[string][]string, error) {
-	res := make(map[string][]string)
+func (c *Config) Certificates() ([][]string, error) {
+	head := make(map[string][]string)
 	tails := make(map[string][]string)
 	for _, site := range c.Sites {
 		domain := site.Domain
@@ -80,11 +89,11 @@ func (c *Config) CertificateDomains() (map[string][]string, error) {
 		if redirects {
 			tails[target] = append(tails[target], domain)
 		} else {
-			res[domain] = []string{domain}
+			head[domain] = []string{domain}
 		}
 	}
 	for domain, tail := range tails {
-		if res[domain] == nil {
+		if head[domain] == nil {
 			// This case includes both, invalid domain names and domains which
 			// have a UseKeyOf of their own.
 			return nil, &DomainError{
@@ -92,7 +101,12 @@ func (c *Config) CertificateDomains() (map[string][]string, error) {
 				Problem: "invalid target for UseKeyOf",
 			}
 		}
-		res[domain] = append(res[domain], tail...)
+		head[domain] = append(head[domain], tail...)
+	}
+
+	var res [][]string
+	for _, domains := range head {
+		res = append(res, domains)
 	}
 	return res, nil
 }
@@ -180,6 +194,84 @@ func (c *Config) GetWebRoot(domain string) (string, error) {
 	}
 
 	return c.runTemplate(c.webRootTmpl, site)
+}
+
+// PublishFile puts a file with the given contents on the web server.
+// Returns the created file name (to be used when later removing the file)
+// and an error, if any.
+func (c *Config) PublishFile(domain, path string, contents []byte) (string, error) {
+	root, err := c.GetWebRoot(domain)
+	if err != nil {
+		return "", err
+	}
+	fname := filepath.Join(root, filepath.Clean(filepath.FromSlash(path)))
+
+	err = os.MkdirAll(filepath.Dir(fname), 0755)
+	if err != nil {
+		return "", err
+	}
+
+	fd, err := os.Create(fname)
+	if err != nil {
+		return "", err
+	}
+	defer fd.Close()
+
+	_, err = fd.Write(contents)
+	return fname, err
+}
+
+// TestChallenge tries to publish and read back a challenge response file for
+// the given domain.
+func (c *Config) TestChallenge(domain string) error {
+	token := make([]byte, 8)
+	_, err := io.ReadFull(rand.Reader, token)
+	if err != nil {
+		return err
+	}
+	tokenStr := base64.RawURLEncoding.EncodeToString(token)
+	urlPath := path.Join(".well-known/acme-challenge", "jvcert-"+tokenStr)
+	fname, err := c.PublishFile(domain, urlPath, token)
+	if err != nil {
+		return &DomainError{
+			Domain:  domain,
+			Problem: "cannot publish file",
+			Err:     err,
+		}
+	}
+	defer os.Remove(fname)
+
+	resp, err := http.Get("http://" + domain + "/" + urlPath)
+	if resp != nil {
+		defer resp.Body.Close()
+	}
+	if err != nil || resp.StatusCode != 200 {
+		if err == nil {
+			err = errors.New(resp.Status)
+		}
+		return &DomainError{
+			Domain:  domain,
+			Problem: "cannot get challenge response via http",
+			Err:     err,
+		}
+	}
+	body, err := ioutil.ReadAll(resp.Body)
+	if err != nil {
+		return &DomainError{
+			Domain:  domain,
+			Problem: "cannot read challenge response body",
+			Err:     err,
+		}
+	}
+
+	if bytes.Compare(token, body) != 0 {
+		return &DomainError{
+			Domain:  domain,
+			Problem: "challenge response body corrupted",
+		}
+	}
+
+	return nil
 }
 
 func (c *Config) getDomainSite(domain string) (*ConfigSite, error) {
