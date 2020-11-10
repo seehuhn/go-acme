@@ -19,6 +19,8 @@ package cert
 import "errors"
 
 var (
+	errNoKey = errors.New("domain has no associated key/cert")
+
 	errNoChallenge = errors.New("no http-01 challenge offered")
 
 	errInvalidKey     = errors.New("invalid key")
@@ -26,7 +28,7 @@ var (
 	errUnknownIDType  = errors.New("unknown ID type")
 )
 
-// A DomainError indicates a domain relating to a domain.
+// A DomainError indicates an error relating to a domain.
 type DomainError struct {
 	Domain, Problem string
 	Err             error

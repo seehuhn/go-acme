@@ -20,19 +20,16 @@ import (
 	"errors"
 	"flag"
 	"fmt"
-	"log"
 	"os"
 	"path/filepath"
-	"strings"
 	"time"
-	"unicode/utf8"
 
 	"gopkg.in/yaml.v3"
 
 	"seehuhn.de/go/acme/cert"
 )
 
-var cmds = map[string]func(*cert.Manager, ...string) error{
+var cmds = map[string]func(*cert.Config, *cert.Manager, ...string) error{
 	"check":       CmdCheck,
 	"list":        CmdList,
 	"renew":       CmdRenew,
@@ -41,19 +38,6 @@ var cmds = map[string]func(*cert.Manager, ...string) error{
 
 var configFileName = flag.String("c", "config.yml",
 	"name of the configuration file")
-
-type table struct {
-	header []string
-	rows   [][]string
-}
-
-func (T *table) SetHeader(names ...string) {
-	T.header = names
-}
-
-func (T *table) AddRow(row ...string) {
-	T.rows = append(T.rows, row)
-}
 
 func readConfig(fname string) (*cert.Config, error) {
 	fd, err := os.Open(fname)
@@ -72,60 +56,191 @@ func readConfig(fname string) (*cert.Config, error) {
 	return config, nil
 }
 
-func (T *table) Show() {
-	ww := make([]int, len(T.header))
-	for i, name := range T.header {
-		ww[i] = utf8.RuneCountInString(name)
-	}
-	for _, row := range T.rows {
-		for i, text := range row {
-			w := utf8.RuneCountInString(text)
-			if w > ww[i] {
-				ww[i] = w
-			}
-		}
-	}
+type dirStatus int
 
-	parts := make([]string, len(ww))
-	for i, text := range T.header {
-		parts[i] = fmt.Sprintf("%-*s", ww[i], text)
+func isFile(fname string) (os.FileMode, error) {
+	stat, err := os.Stat(fname)
+	if os.IsNotExist(err) {
+		return 0, nil
+	} else if err != nil {
+		return 0, err
 	}
-	fmt.Println(strings.Join(parts, " | "))
-	for i, w := range ww {
-		parts[i] = strings.Repeat("-", w)
-	}
-	fmt.Println(strings.Join(parts, "-+-"))
-	for _, row := range T.rows {
-		for i, text := range row {
-			parts[i] = fmt.Sprintf("%-*s", ww[i], text)
-		}
-		fmt.Println(strings.Join(parts, " | "))
-	}
+	return stat.Mode(), nil
 }
 
 // CmdCheck checks the data from the configuration file for correctness and
 // consistency.
-func CmdCheck(m *cert.Manager, args ...string) error {
-	err := m.CheckConfig()
-	if fe, ok := err.(*cert.FileError); ok {
-		fe.FileName = *configFileName
+func CmdCheck(c *cert.Config, m *cert.Manager, args ...string) error {
+	var errors []string
+	var warnings []string
+
+	dirSeen := make(map[string]bool)
+	dirChecked := make(map[string]bool)
+	checkDir := func(dirType, dirName string, checkPerms bool) (string, error) {
+		if dirName == "" {
+			msg := dirType + " not set"
+			errors = append(errors, msg)
+			return msg, nil
+		}
+
+		stat, err := os.Stat(dirName)
+		if os.IsNotExist(err) {
+			msg := fmt.Sprintf("%s %q does not exist", dirType, dirName)
+			if !dirSeen[dirName] {
+				dirSeen[dirName] = true
+				errors = append(errors, msg)
+			}
+			return msg, nil
+		} else if err != nil {
+			return "", err
+		}
+		if !stat.IsDir() {
+			msg := fmt.Sprintf("%s %q is not a directory", dirType, dirName)
+			if !dirSeen[dirName] {
+				dirSeen[dirName] = true
+				errors = append(errors, msg)
+			}
+			return msg, nil
+		}
+
+		if stat.Mode()&0022 != 0 {
+			msg := fmt.Sprintf("%s %q has insecure permissions",
+				dirType, dirName)
+			if !dirChecked[dirName] {
+				dirChecked[dirName] = true
+				warnings = append(warnings, msg)
+			}
+			return msg, nil
+		}
+
+		return "", nil
 	}
+
+	_, err := checkDir("accountdir", c.AccountDir, true)
+	if err != nil {
+		return err
+	}
+
+	T := &table{}
+	T.SetHeader("domain", "chall.", "key", "comments")
+	seen := make(map[string]bool)
+	if len(c.Sites) == 0 {
+		warnings = append(warnings, "no sites specified")
+	}
+	for _, site := range c.Sites {
+		domain := site.Domain
+		if seen[domain] {
+			errors = append(errors, "duplicate domain "+domain)
+			continue
+		}
+		seen[domain] = true
+
+		challenge := "n/a"
+		key := "n/a"
+		msg := ""
+
+		if site.UseKeyOf != "" {
+			if site.KeyFile != "" || site.CertFile != "" {
+				msg = "uses both usekeyof and keyfile/certfile"
+				errors = append(errors, domain+" "+msg)
+			} else {
+				msg = "shares key/cert with " + site.UseKeyOf
+			}
+			T.AddRow(domain, challenge, key, msg)
+			continue
+		}
+
+		keyFile, err := c.GetKeyFileName(domain)
+		if err != nil {
+			return err
+		}
+		keyDir := filepath.Dir(keyFile)
+		m2, err := checkDir("key directory", keyDir, true)
+		if err != nil {
+			return err
+		}
+		if m2 == "" {
+			mode, err := isFile(keyFile)
+			if err != nil {
+				return err
+			}
+			if mode == 0 {
+				key = "missing"
+			} else if !mode.IsRegular() {
+				key = "error"
+				msg = fmt.Sprintf("%q is not a regular file", keyFile)
+				errors = append(errors, msg)
+			} else if mode&0007 != 0 {
+				key = "errors"
+				msg = fmt.Sprintf("%q has insecure permissions", keyFile)
+				errors = append(errors, msg)
+			} else {
+				key = "ok"
+			}
+		} else {
+			key = "error"
+			if msg == "" {
+				msg = m2
+			}
+		}
+
+		err = m.TestChallenge(domain)
+		if err != nil {
+			challenge = "error"
+			m2 := "cannot answer challenges"
+			if msg == "" {
+				msg = m2
+			}
+			errors = append(errors, m2+" for "+domain+":\n  "+err.Error())
+		} else {
+			challenge = "ok"
+		}
+		T.AddRow(domain, challenge, key, msg)
+	}
+	T.Show()
+
+	if len(warnings) > 0 {
+		fmt.Print("\nWarnings:\n")
+		for _, w := range warnings {
+			fmt.Println("- " + w)
+		}
+	}
+
+	if len(errors) > 0 {
+		fmt.Print("\nErrors:\n")
+		for _, e := range errors {
+			fmt.Println("- " + e)
+		}
+		err = fmt.Errorf("%d errors / %d warnings", len(errors), len(warnings))
+	} else {
+		err = nil
+	}
+	fmt.Println()
+
 	return err
 }
 
 // CmdList prints a table with information about all known certificates to stdout.
-func CmdList(m *cert.Manager, args ...string) error {
+func CmdList(c *cert.Config, m *cert.Manager, args ...string) error {
 	ff := flag.NewFlagSet("list", flag.ExitOnError)
 	ff.Parse(args)
 
 	domains := ff.Args()
 	if len(domains) == 0 {
-		domains = m.Domains()
+		domains = c.Domains()
 	}
 
 	T := &table{}
 	T.SetHeader("domain", "valid", "expiry time", "comment")
-	for _, domain := range domains {
+	for _, site := range c.Sites {
+		domain := site.Domain
+
+		if site.UseKeyOf != "" {
+			T.AddRow(domain, "n/a", "n/a",
+				"shares key/cert with "+site.UseKeyOf)
+			continue
+		}
+
 		info, err := m.GetCertInfo([]string{domain})
 		if err != nil {
 			return err
@@ -150,7 +265,7 @@ func CmdList(m *cert.Manager, args ...string) error {
 
 // CmdRenew renews all certificates which are not valid for at least 7 more
 // days.
-func CmdRenew(m *cert.Manager, args ...string) error {
+func CmdRenew(c *cert.Config, m *cert.Manager, args ...string) error {
 	ff := flag.NewFlagSet("renew", flag.ExitOnError)
 	force := ff.Bool("f", false, "renew even if the old cert is still good")
 	ff.Parse(args)
@@ -160,7 +275,7 @@ func CmdRenew(m *cert.Manager, args ...string) error {
 	for _, site := range domains {
 		doRenew[site] = false
 	}
-	for _, domain := range m.Domains() {
+	for _, domain := range c.Domains() {
 		if _, ok := doRenew[domain]; ok || len(domains) == 0 {
 			doRenew[domain] = true
 		}
@@ -202,7 +317,7 @@ func CmdRenew(m *cert.Manager, args ...string) error {
 }
 
 // CmdSelfSigned installs a self-signed dummy certificate for a domain.
-func CmdSelfSigned(m *cert.Manager, args ...string) error {
+func CmdSelfSigned(c *cert.Config, m *cert.Manager, args ...string) error {
 	ff := flag.NewFlagSet("self-signed", flag.ExitOnError)
 	force := ff.Bool("f", false, "replace valid certificates")
 	ff.Parse(args)
@@ -268,22 +383,25 @@ func main() {
 
 	config, err := readConfig(*configFileName)
 	if err != nil {
-		log.Fatal(err)
+		fmt.Fprintln(os.Stderr, err.Error())
+		os.Exit(1)
 	}
 
 	m, err := cert.NewManager(config, *debug)
 	if err != nil {
-		log.Fatal(err)
+		fmt.Fprintln(os.Stderr, err.Error())
+		os.Exit(1)
 	}
 
 	fn, ok := cmds[args[0]]
 	if ok {
-		err = fn(m, args[1:]...)
+		err = fn(config, m, args[1:]...)
 	} else {
 		err = fmt.Errorf("unknown command %q", args[0])
 	}
 
 	if err != nil {
-		log.Fatal(err)
+		fmt.Fprintln(os.Stderr, err.Error())
+		os.Exit(1)
 	}
 }

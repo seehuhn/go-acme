@@ -40,6 +40,7 @@ func isDir(dirName string) error {
 // Make sure dirName exists and is a directory.  Create a new directory if
 // needed.
 func createDirIfNeeded(dirName string, perm os.FileMode) error {
+	// TODO(voss): do we need/want this function?
 	err := isDir(dirName)
 	if os.IsNotExist(err) {
 		return os.MkdirAll(dirName, perm)

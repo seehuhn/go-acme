@@ -56,11 +56,6 @@ type Manager struct {
 
 // NewManager creates a new certificate manager.
 func NewManager(config *Config, debug bool) (*Manager, error) {
-	err := createDirIfNeeded(config.AccountDir, 0700)
-	if err != nil {
-		return nil, err
-	}
-
 	roots, err := x509.SystemCertPool()
 	if err != nil {
 		return nil, err
@@ -78,53 +73,6 @@ func NewManager(config *Config, debug bool) (*Manager, error) {
 
 		siteKeys: make(map[string]crypto.Signer),
 	}, nil
-}
-
-// Domains returns all domain names known to this manager.
-func (m *Manager) Domains() []string {
-	dd := make([]string, len(m.config.Sites))
-	for i, site := range m.config.Sites {
-		dd[i] = site.Domain
-	}
-	return dd
-}
-
-// CheckConfig checks the configuration file of `m` for problems.
-func (m *Manager) CheckConfig() error {
-	_, err := m.getAccountKey()
-	if err != nil {
-		return err
-	}
-
-	if len(m.config.Sites) == 0 {
-		return &FileError{
-			Problem: "contains no sites",
-		}
-	}
-
-	// try to publish a file for each site
-	seen := make(map[string]bool)
-	for _, site := range m.config.Sites {
-		domain := site.Domain
-		if seen[domain] {
-			return &FileError{
-				Problem: "duplicate domain",
-			}
-		}
-		seen[domain] = true
-
-		_, err := m.getKey(domain)
-		if err != nil {
-			return err
-		}
-
-		err = m.TestChallenge(domain)
-		if err != nil {
-			return err
-		}
-	}
-
-	return nil
 }
 
 // TestChallenge tries to publish and read back a challenge response file for

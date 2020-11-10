@@ -21,8 +21,8 @@ import (
 	"text/template"
 )
 
-// Config describes the certificate data for a web server, potentially serving
-// more than one domain.
+// Config describes the certificate data for a web server, serving one or
+// more domains.
 type Config struct {
 	AccountDir   string
 	ContactEmail string `yaml:",omitempty"`
@@ -40,7 +40,7 @@ type Config struct {
 
 // ConfigSite describes the certificate data for a single domain.
 type ConfigSite struct {
-	Name     string
+	Name     string `yaml:",omitempty"` // TODO(voss): remove this field?
 	Domain   string
 	UseKeyOf string `yaml:",omitempty"`
 	KeyFile  string `yaml:",omitempty"`
@@ -48,25 +48,60 @@ type ConfigSite struct {
 	WebRoot  string `yaml:",omitempty"`
 }
 
-func (c *Config) groups() error {
-	next := make(map[string]string)
-	dd := make(map[string][]string)
+// Domains returns all domain names in the configuration data.
+func (c *Config) Domains() []string {
+	dd := make([]string, len(c.Sites))
+	for i, site := range c.Sites {
+		dd[i] = site.Domain
+	}
+	return dd
+}
+
+// CertificateDomains returns a list of certificates the Config describes. Each
+// elements of the returned slice is a list of domain names to be used for a
+// single certificate.  The first domain name is the one which holds
+// information about the key and certificate file names.
+func (c *Config) CertificateDomains() (map[string][]string, error) {
+	res := make(map[string][]string)
+	tails := make(map[string][]string)
 	for _, site := range c.Sites {
 		domain := site.Domain
-		next[domain] = site.UseKeyOf
-		dd[domain] = []string{domain}
 
-		a := site.UseKeyOf != ""
-		b := site.KeyFile != "" || site.CertFile != ""
-		if a && b {
-			return &DomainError{
+		target := site.UseKeyOf
+		redirects := target != ""
+		hasKey := site.KeyFile != "" || site.CertFile != ""
+		if redirects && hasKey {
+			return nil, &DomainError{
 				Domain:  domain,
 				Problem: "UseKeyOf and KeyFile/CertFile are mutually exclusive",
 			}
 		}
+
+		if redirects {
+			tails[target] = append(tails[target], domain)
+		} else {
+			res[domain] = []string{domain}
+		}
 	}
-	// TODO(voss): ...
-	return nil
+	for domain, tail := range tails {
+		if res[domain] == nil {
+			// This case includes both, invalid domain names and domains which
+			// have a UseKeyOf of their own.
+			return nil, &DomainError{
+				Domain:  domain,
+				Problem: "invalid target for UseKeyOf",
+			}
+		}
+		res[domain] = append(res[domain], tail...)
+	}
+	return res, nil
+}
+
+func oneKeyOf(m map[string]bool) string {
+	for key := range m {
+		return key
+	}
+	return ""
 }
 
 // GetKeyFileName returns the file name for the private key of `domain`.
@@ -77,7 +112,7 @@ func (c *Config) GetKeyFileName(domain string) (string, error) {
 	}
 
 	if site.UseKeyOf != "" {
-		return c.GetKeyFileName(site.UseKeyOf)
+		return "", errNoKey
 	}
 
 	if site.KeyFile != "" {
@@ -104,7 +139,7 @@ func (c *Config) GetCertFileName(domain string) (string, error) {
 	}
 
 	if site.UseKeyOf != "" {
-		return c.GetCertFileName(site.UseKeyOf)
+		return "", errNoKey
 	}
 
 	if site.CertFile != "" {

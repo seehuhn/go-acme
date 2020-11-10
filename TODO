@@ -1,7 +1,9 @@
 - allow for more than one domain per certificate
+- try to download certificates from the server and compare to the
+  certificate we think we are using
 - keep track of how much of the rate limit allowance we have used
 - don't abort renewals, when individual sites fail
-- can we remove the .Name field of ConfigSite
+- can we remove the .Name field of ConfigSite?
 
 - keep a log of activities, including all the rate limited ones
 - allow to restrict "check" to individual domains
