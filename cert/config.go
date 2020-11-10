@@ -18,6 +18,7 @@ package cert
 
 import (
 	"bytes"
+	"strings"
 	"text/template"
 )
 
@@ -40,7 +41,6 @@ type Config struct {
 
 // ConfigSite describes the certificate data for a single domain.
 type ConfigSite struct {
-	Name     string `yaml:",omitempty"` // TODO(voss): remove this field?
 	Domain   string
 	UseKeyOf string `yaml:",omitempty"`
 	KeyFile  string `yaml:",omitempty"`
@@ -201,10 +201,14 @@ func (c *Config) getDomainSite(domain string) (*ConfigSite, error) {
 }
 
 func (c *Config) runTemplate(tmpl *template.Template, site *ConfigSite) (string, error) {
+	domain := site.Domain
+	noWWW := strings.TrimPrefix(domain, "www.")
+	first := strings.SplitN(noWWW, ".", 2)[0]
 	buf := &bytes.Buffer{}
 	err := tmpl.Execute(buf, map[string]interface{}{
-		"Config": c,
-		"Site":   site,
+		"Domain": domain,
+		"NoWWW":  noWWW,
+		"First":  first,
 	})
 	if err != nil {
 		return "", err

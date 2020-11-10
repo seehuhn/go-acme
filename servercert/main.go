@@ -75,8 +75,7 @@ func CmdCheck(c *cert.Config, m *cert.Manager, args ...string) error {
 	var warnings []string
 
 	dirSeen := make(map[string]bool)
-	dirChecked := make(map[string]bool)
-	checkDir := func(dirType, dirName string, checkPerms bool) (string, error) {
+	checkDir := func(dirType, dirName string) (string, error) {
 		if dirName == "" {
 			msg := dirType + " not set"
 			errors = append(errors, msg)
@@ -103,26 +102,16 @@ func CmdCheck(c *cert.Config, m *cert.Manager, args ...string) error {
 			return msg, nil
 		}
 
-		if stat.Mode()&0022 != 0 {
-			msg := fmt.Sprintf("%s %q has insecure permissions",
-				dirType, dirName)
-			if !dirChecked[dirName] {
-				dirChecked[dirName] = true
-				warnings = append(warnings, msg)
-			}
-			return msg, nil
-		}
-
 		return "", nil
 	}
 
-	_, err := checkDir("accountdir", c.AccountDir, true)
+	_, err := checkDir("accountdir", c.AccountDir)
 	if err != nil {
 		return err
 	}
 
 	T := &table{}
-	T.SetHeader("domain", "chall.", "key", "comments")
+	T.SetHeader("domain", "key", "cert", "chall.", "comments")
 	seen := make(map[string]bool)
 	if len(c.Sites) == 0 {
 		warnings = append(warnings, "no sites specified")
@@ -135,8 +124,9 @@ func CmdCheck(c *cert.Config, m *cert.Manager, args ...string) error {
 		}
 		seen[domain] = true
 
-		challenge := "n/a"
-		key := "n/a"
+		challenge := "-"
+		key := "-"
+		cert := "-"
 		msg := ""
 
 		if site.UseKeyOf != "" {
@@ -146,7 +136,7 @@ func CmdCheck(c *cert.Config, m *cert.Manager, args ...string) error {
 			} else {
 				msg = "shares key/cert with " + site.UseKeyOf
 			}
-			T.AddRow(domain, challenge, key, msg)
+			T.AddRow(domain, key, cert, challenge, msg)
 			continue
 		}
 
@@ -155,7 +145,7 @@ func CmdCheck(c *cert.Config, m *cert.Manager, args ...string) error {
 			return err
 		}
 		keyDir := filepath.Dir(keyFile)
-		m2, err := checkDir("key directory", keyDir, true)
+		m2, err := checkDir("key directory", keyDir)
 		if err != nil {
 			return err
 		}
@@ -170,12 +160,8 @@ func CmdCheck(c *cert.Config, m *cert.Manager, args ...string) error {
 				key = "error"
 				msg = fmt.Sprintf("%q is not a regular file", keyFile)
 				errors = append(errors, msg)
-			} else if mode&0007 != 0 {
-				key = "errors"
-				msg = fmt.Sprintf("%q has insecure permissions", keyFile)
-				errors = append(errors, msg)
 			} else {
-				key = "ok"
+				key = "present"
 			}
 		} else {
 			key = "error"
@@ -184,18 +170,55 @@ func CmdCheck(c *cert.Config, m *cert.Manager, args ...string) error {
 			}
 		}
 
-		err = m.TestChallenge(domain)
+		certFile, err := c.GetCertFileName(domain)
 		if err != nil {
-			challenge = "error"
-			m2 := "cannot answer challenges"
+			return err
+		}
+		certDir := filepath.Dir(certFile)
+		m2, err = checkDir("cert directory", certDir)
+		if err != nil {
+			return err
+		}
+		if m2 == "" {
+			mode, err := isFile(certFile)
+			if err != nil {
+				return err
+			}
+			if mode == 0 {
+				cert = "missing"
+			} else if !mode.IsRegular() {
+				cert = "error"
+				msg = fmt.Sprintf("%q is not a regular file", certFile)
+				errors = append(errors, msg)
+			} else {
+				cert = "present"
+			}
+		} else {
+			cert = "error"
 			if msg == "" {
 				msg = m2
 			}
-			errors = append(errors, m2+" for "+domain+":\n  "+err.Error())
+		}
+
+		err = m.TestChallenge(domain)
+		if err != nil {
+			challenge = "error"
+			m2 := "cannot respond to challenges"
+			if msg == "" {
+				msg = m2
+			}
+			root, e2 := c.GetWebRoot(domain)
+			if e2 != nil {
+				return e2
+			}
+			errors = append(errors,
+				m2+" for "+domain+":\n"+
+					"  trying to publish at "+root+"\n"+
+					"  "+err.Error())
 		} else {
 			challenge = "ok"
 		}
-		T.AddRow(domain, challenge, key, msg)
+		T.AddRow(domain, key, cert, challenge, msg)
 	}
 	T.Show()
 
@@ -236,7 +259,7 @@ func CmdList(c *cert.Config, m *cert.Manager, args ...string) error {
 		domain := site.Domain
 
 		if site.UseKeyOf != "" {
-			T.AddRow(domain, "n/a", "n/a",
+			T.AddRow(domain, "-", "-",
 				"shares key/cert with "+site.UseKeyOf)
 			continue
 		}
