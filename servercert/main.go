@@ -94,7 +94,7 @@ func CmdCheckCerts(c *cert.Config, m *cert.Manager, args ...string) error {
 		serverCert, err := getServerCertDER(mainDomain)
 		if err != nil {
 			sStr = "error"
-		} else if bytes.Compare(serverCert, info.Raw) != 0 {
+		} else if bytes.Compare(serverCert, info.Cert.Raw) != 0 {
 			sStr = "outdated"
 		} else {
 			sStr = "ok"
@@ -107,7 +107,7 @@ func CmdCheckCerts(c *cert.Config, m *cert.Manager, args ...string) error {
 			msg := ""
 
 			if valid {
-				err = info.Parsed.VerifyHostname(domain)
+				err = info.Cert.VerifyHostname(domain)
 				if err != nil {
 					valid = false
 					msg = "domain name not on certificate"
@@ -117,7 +117,7 @@ func CmdCheckCerts(c *cert.Config, m *cert.Manager, args ...string) error {
 			serverCert, err = getServerCertDER(domain)
 			if err != nil {
 				sStr = "error"
-			} else if bytes.Compare(serverCert, info.Raw) != 0 {
+			} else if bytes.Compare(serverCert, info.Cert.Raw) != 0 {
 				sStr = "outdated"
 			} else {
 				sStr = "ok"
@@ -484,6 +484,44 @@ func CmdShowServerCert(c *cert.Config, m *cert.Manager, args ...string) error {
 				fmt.Printf("    %x (unknown bits)\n", usage)
 			}
 
+			if len(cert.ExtKeyUsage) > 0 {
+				fmt.Println("ExtKeyUsage:")
+				for _, usage := range cert.ExtKeyUsage {
+					switch usage {
+					case x509.ExtKeyUsageAny:
+						fmt.Println("    Any")
+					case x509.ExtKeyUsageServerAuth:
+						fmt.Println("    ServerAuth")
+					case x509.ExtKeyUsageClientAuth:
+						fmt.Println("    ClientAuth")
+					case x509.ExtKeyUsageCodeSigning:
+						fmt.Println("    CodeSigning")
+					case x509.ExtKeyUsageEmailProtection:
+						fmt.Println("    EmailProtection")
+					case x509.ExtKeyUsageIPSECEndSystem:
+						fmt.Println("    IPSECEndSystem")
+					case x509.ExtKeyUsageIPSECTunnel:
+						fmt.Println("    IPSECTunnel")
+					case x509.ExtKeyUsageIPSECUser:
+						fmt.Println("    IPSECUser")
+					case x509.ExtKeyUsageTimeStamping:
+						fmt.Println("    TimeStamping")
+					case x509.ExtKeyUsageOCSPSigning:
+						fmt.Println("    OCSPSigning")
+					case x509.ExtKeyUsageMicrosoftServerGatedCrypto:
+						fmt.Println("    MicrosoftServerGatedCrypto")
+					case x509.ExtKeyUsageNetscapeServerGatedCrypto:
+						fmt.Println("    NetscapeServerGatedCrypto")
+					case x509.ExtKeyUsageMicrosoftCommercialCodeSigning:
+						fmt.Println("    MicrosoftCommercialCodeSigning")
+					case x509.ExtKeyUsageMicrosoftKernelCodeSigning:
+						fmt.Println("    MicrosoftKernelCodeSigning")
+					default:
+						fmt.Printf("    unknown %d\n", usage)
+					}
+				}
+			}
+
 			fmt.Println("PublicKeyAlgorithm:", cert.PublicKeyAlgorithm)
 			fmt.Println("SignatureAlgorithm:", cert.SignatureAlgorithm)
 		}
@@ -493,14 +531,13 @@ func CmdShowServerCert(c *cert.Config, m *cert.Manager, args ...string) error {
 
 func main() {
 	debug := flag.Bool("D", true,
-		"debug mode (relaxed rate limits, but invalid certifiates)")
+		"debug mode (relaxed rate limits, but invalid certificates)")
 	version := flag.Bool("version", false,
 		"output version information and exit")
 
 	flag.Usage = func() {
-		name := filepath.Base(os.Args[0])
 		fmt.Fprintf(flag.CommandLine.Output(),
-			"usage: %s [options] command [arguments]\n\n", name)
+			"usage: %s [options] command [arguments]\n\n", cmdName)
 		fmt.Fprintln(flag.CommandLine.Output(), "Valid options are:")
 		flag.PrintDefaults()
 		fmt.Fprintln(flag.CommandLine.Output(), "\nCommand must be one of")
@@ -509,7 +546,7 @@ func main() {
 		}
 		fmt.Fprintf(flag.CommandLine.Output(),
 			"\nUse \"%s command -h\" to get help about a specific command.\n",
-			name)
+			cmdName)
 	}
 	flag.Parse()
 	args := flag.Args()
@@ -542,11 +579,19 @@ func main() {
 	if ok {
 		err = fn(config, m, args[1:]...)
 	} else {
-		err = fmt.Errorf("unknown command %q", args[0])
+		err = fmt.Errorf(
+			"unknown command %q, use \"%s -help\" for help",
+			args[0], cmdName)
 	}
 
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err.Error())
 		os.Exit(1)
 	}
+}
+
+var cmdName string
+
+func init() {
+	cmdName = filepath.Base(os.Args[0])
 }

@@ -72,8 +72,7 @@ func NewManager(config *Config, debug bool) (*Manager, error) {
 // Info contains information about a single certificate installed on the
 // system.
 type Info struct {
-	Raw       []byte
-	Parsed    *x509.Certificate
+	Cert      *x509.Certificate
 	IsValid   bool
 	IsMissing bool
 	Expiry    time.Time
@@ -90,8 +89,7 @@ func (m *Manager) GetCertInfo(domain string) (*Info, error) {
 	if err != nil && !os.IsNotExist(err) {
 		return nil, err
 	}
-
-	info, err := m.checkCert(time.Now(), chainDER, domain)
+	info, err := m.checkCertDER(time.Now(), chainDER, domain)
 	if err != nil {
 		return nil, err
 	}
@@ -163,7 +161,7 @@ func (m *Manager) RenewCertificate(domains []string) error {
 	if err != nil {
 		return err
 	}
-	info, err := m.checkCert(time.Now(), chainDER, domains[0])
+	info, err := m.checkCertDER(time.Now(), chainDER, domains[0])
 	if err != nil {
 		return err
 	}
@@ -225,23 +223,29 @@ func (m *Manager) getAccountKey() (crypto.Signer, error) {
 	return accountKey, nil
 }
 
-func (m *Manager) checkCert(now time.Time, chainDER [][]byte, domain string) (*Info, error) {
-	// TODO(voss): this should not be a method of m
-	info := &Info{
-		Raw: chainDER[0],
+func (m *Manager) checkCertDER(now time.Time, chainDER [][]byte, domain string) (*Info, error) {
+	chain := make([]*x509.Certificate, len(chainDER))
+	for i, der := range chainDER {
+		cert, err := x509.ParseCertificate(der)
+		if err != nil {
+			return nil, err
+		}
+		chain[i] = cert
 	}
+	return m.checkCert(now, chain, domain)
+}
 
-	if len(chainDER) == 0 {
+func (m *Manager) checkCert(now time.Time, chain []*x509.Certificate, domain string) (*Info, error) {
+	info := &Info{}
+
+	if len(chain) == 0 {
 		info.IsMissing = true
 		info.Message = "missing"
 		return info, nil
 	}
 
-	siteCertDER := chainDER[0]
-	siteCert, err := x509.ParseCertificate(siteCertDER)
-	if err != nil {
-		return nil, err
-	}
+	siteCert := chain[0]
+
 	if now.Before(siteCert.NotBefore) {
 		info.Message = "not valid until " + siteCert.NotBefore.String()
 		return info, nil
@@ -277,11 +281,7 @@ func (m *Manager) checkCert(now time.Time, chainDER [][]byte, domain string) (*I
 	}
 
 	intermediates := x509.NewCertPool()
-	for _, caCertDER := range chainDER[1:] {
-		caCert, err := x509.ParseCertificate(caCertDER)
-		if err != nil {
-			return nil, err
-		}
+	for _, caCert := range chain[1:] {
 		intermediates.AddCert(caCert)
 	}
 	opts := x509.VerifyOptions{
@@ -297,7 +297,7 @@ func (m *Manager) checkCert(now time.Time, chainDER [][]byte, domain string) (*I
 	}
 
 	info.IsValid = true
-	info.Parsed = siteCert
+	info.Cert = siteCert
 	info.Message = "issued by " + siteCert.Issuer.String()
 
 	return info, nil
