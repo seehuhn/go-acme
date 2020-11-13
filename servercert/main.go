@@ -100,7 +100,11 @@ func CmdCheckCerts(c *cert.Config, m *cert.Manager, args ...string) error {
 			sStr = "ok"
 		}
 
-		T.AddRow(mainDomain, fmt.Sprint(info.IsValid), tStr, sStr, info.Message)
+		msg := info.Message
+		if msg == "" {
+			msg = "issued by " + info.Cert.Issuer.String()
+		}
+		T.AddRow(mainDomain, fmt.Sprint(info.IsValid), tStr, sStr, msg)
 
 		for _, domain := range domains[1:] {
 			valid := info.IsValid
@@ -420,9 +424,17 @@ func CmdShowServerCert(c *cert.Config, m *cert.Manager, args ...string) error {
 			fmt.Print("cannot download server certificate for " + domain + "\n\n")
 			continue
 		}
-
 		fmt.Println(domain+": certificate chain of length", len(chain),
 			"received")
+
+		info, err := m.CheckCert(time.Now(), chain, domain)
+		if err != nil {
+			return err
+		}
+		if !info.IsValid {
+			fmt.Println("\nINVALID CERTIFICATE: " + info.Message)
+		}
+
 		for _, cert := range chain {
 			fmt.Println()
 			if len(cert.DNSNames) > 0 {

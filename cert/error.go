@@ -19,13 +19,11 @@ package cert
 import "errors"
 
 var (
-	errNoKey = errors.New("domain has no associated key/cert")
-
-	errNoChallenge = errors.New("no http-01 challenge offered")
-
-	errInvalidKey     = errors.New("invalid key")
-	errUnknownKeyType = errors.New("unknown key type")
-	errUnknownIDType  = errors.New("unknown ID type")
+	errInvalidKey    = errors.New("not a valid PEM key file")
+	errNoChallenge   = errors.New("no http-01 challenge offered")
+	errNoKey         = errors.New("domain has no associated key/cert")
+	errUnknownIDType = errors.New("unknown ID type")
+	errWrongKey      = errors.New("certificate uses wrong private key")
 )
 
 // A DomainError indicates an error relating to a domain.

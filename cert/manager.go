@@ -232,10 +232,47 @@ func (m *Manager) checkCertDER(now time.Time, chainDER [][]byte, domain string) 
 		}
 		chain[i] = cert
 	}
-	return m.checkCert(now, chain, domain)
+
+	info, err := m.CheckCert(now, chain, domain)
+	if err != nil {
+		return nil, err
+	}
+
+	if info.IsValid {
+		key, err := m.getKey(domain)
+		if err != nil {
+			return nil, err
+		}
+		err = checkCertMatchesKey(info.Cert, key)
+		if err != nil {
+			info.IsValid = false
+			info.Message = err.Error()
+		}
+	}
+
+	return info, nil
 }
 
-func (m *Manager) checkCert(now time.Time, chain []*x509.Certificate, domain string) (*Info, error) {
+// Ensure the siteCert corresponds to the correct private key.
+func checkCertMatchesKey(cert *x509.Certificate, key crypto.Signer) error {
+	switch pub := cert.PublicKey.(type) {
+	case *rsa.PublicKey:
+		prv, ok := key.(*rsa.PrivateKey)
+		if !ok || pub.N.Cmp(prv.N) != 0 {
+			return errWrongKey
+		}
+	case *ecdsa.PublicKey:
+		prv, ok := key.(*ecdsa.PrivateKey)
+		if !ok || pub.X.Cmp(prv.X) != 0 || pub.Y.Cmp(prv.Y) != 0 {
+			return errWrongKey
+		}
+	default:
+		return errWrongKey // unknown key type
+	}
+	return nil
+}
+
+func (m *Manager) CheckCert(now time.Time, chain []*x509.Certificate, domain string) (*Info, error) {
 	info := &Info{}
 
 	if len(chain) == 0 {
@@ -245,40 +282,8 @@ func (m *Manager) checkCert(now time.Time, chain []*x509.Certificate, domain str
 	}
 
 	siteCert := chain[0]
-
-	if now.Before(siteCert.NotBefore) {
-		info.Message = "not valid until " + siteCert.NotBefore.String()
-		return info, nil
-	}
+	info.Cert = siteCert
 	info.Expiry = siteCert.NotAfter
-	if now.After(siteCert.NotAfter) {
-		info.Message = "expired on " + siteCert.NotAfter.String()
-		return info, nil
-	}
-
-	// Ensure the siteCert corresponds to the correct private key.
-	key, err := m.getKey(domain)
-	if err != nil {
-		return nil, err
-	}
-	switch pub := siteCert.PublicKey.(type) {
-	case *rsa.PublicKey:
-		prv, ok := key.(*rsa.PrivateKey)
-		if !ok || pub.N.Cmp(prv.N) != 0 {
-			info.Expiry = time.Time{}
-			info.Message = "public key doesn't match private key"
-			return info, nil
-		}
-	case *ecdsa.PublicKey:
-		prv, ok := key.(*ecdsa.PrivateKey)
-		if !ok || pub.X.Cmp(prv.X) != 0 || pub.Y.Cmp(prv.Y) != 0 {
-			info.Expiry = time.Time{}
-			info.Message = "public key doesn't match private key"
-			return info, nil
-		}
-	default:
-		return nil, errUnknownKeyType
-	}
 
 	intermediates := x509.NewCertPool()
 	for _, caCert := range chain[1:] {
@@ -290,15 +295,13 @@ func (m *Manager) checkCert(now time.Time, chain []*x509.Certificate, domain str
 		Intermediates: intermediates,
 		CurrentTime:   now,
 	}
-	_, err = siteCert.Verify(opts)
+	_, err := siteCert.Verify(opts)
 	if err != nil {
 		info.Message = err.Error()
 		return info, nil
 	}
 
 	info.IsValid = true
-	info.Cert = siteCert
-	info.Message = "issued by " + siteCert.Issuer.String()
 
 	return info, nil
 }
