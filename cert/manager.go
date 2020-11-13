@@ -72,7 +72,8 @@ func NewManager(config *Config, debug bool) (*Manager, error) {
 // Info contains information about a single certificate installed on the
 // system.
 type Info struct {
-	Domain    string
+	Raw       []byte
+	Parsed    *x509.Certificate
 	IsValid   bool
 	IsMissing bool
 	Expiry    time.Time
@@ -80,8 +81,8 @@ type Info struct {
 }
 
 // GetCertInfo returns information about a certificate managed by m.
-func (m *Manager) GetCertInfo(domains []string) (*Info, error) {
-	certFileName, err := m.config.GetCertFileName(domains[0])
+func (m *Manager) GetCertInfo(domain string) (*Info, error) {
+	certFileName, err := m.config.GetCertFileName(domain)
 	if err != nil {
 		return nil, err
 	}
@@ -90,7 +91,7 @@ func (m *Manager) GetCertInfo(domains []string) (*Info, error) {
 		return nil, err
 	}
 
-	info, err := m.checkCert(time.Now(), chainDER, domains)
+	info, err := m.checkCert(time.Now(), chainDER, domain)
 	if err != nil {
 		return nil, err
 	}
@@ -162,7 +163,7 @@ func (m *Manager) RenewCertificate(domains []string) error {
 	if err != nil {
 		return err
 	}
-	info, err := m.checkCert(time.Now(), chainDER, domains)
+	info, err := m.checkCert(time.Now(), chainDER, domains[0])
 	if err != nil {
 		return err
 	}
@@ -224,9 +225,10 @@ func (m *Manager) getAccountKey() (crypto.Signer, error) {
 	return accountKey, nil
 }
 
-func (m *Manager) checkCert(now time.Time, chainDER [][]byte, domains []string) (*Info, error) {
+func (m *Manager) checkCert(now time.Time, chainDER [][]byte, domain string) (*Info, error) {
+	// TODO(voss): this should not be a method of m
 	info := &Info{
-		Domain: domains[0],
+		Raw: chainDER[0],
 	}
 
 	if len(chainDER) == 0 {
@@ -251,7 +253,7 @@ func (m *Manager) checkCert(now time.Time, chainDER [][]byte, domains []string) 
 	}
 
 	// Ensure the siteCert corresponds to the correct private key.
-	key, err := m.getKey(domains[0])
+	key, err := m.getKey(domain)
 	if err != nil {
 		return nil, err
 	}
@@ -283,6 +285,7 @@ func (m *Manager) checkCert(now time.Time, chainDER [][]byte, domains []string) 
 		intermediates.AddCert(caCert)
 	}
 	opts := x509.VerifyOptions{
+		DNSName:       domain,
 		Roots:         m.roots,
 		Intermediates: intermediates,
 		CurrentTime:   now,
@@ -292,14 +295,9 @@ func (m *Manager) checkCert(now time.Time, chainDER [][]byte, domains []string) 
 		info.Message = err.Error()
 		return info, nil
 	}
-	for _, domain := range domains {
-		err = siteCert.VerifyHostname(domain)
-		if err != nil {
-			return nil, err
-		}
-	}
 
 	info.IsValid = true
+	info.Parsed = siteCert
 	info.Message = "issued by " + siteCert.Issuer.String()
 
 	return info, nil

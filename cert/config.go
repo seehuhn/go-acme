@@ -66,11 +66,11 @@ func (c *Config) Domains() []string {
 	return dd
 }
 
-// Certificates returns a list of certificates the Config describes. Each
+// CertDomains returns a list of certificates the Config describes. Each
 // elements of the returned slice is a list of domain names to be used for a
 // single certificate.  The first domain name is the one which holds
 // information about the key and certificate file names.
-func (c *Config) Certificates() ([][]string, error) {
+func (c *Config) CertDomains() ([][]string, error) {
 	head := make(map[string][]string)
 	tails := make(map[string][]string)
 	for _, site := range c.Sites {

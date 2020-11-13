@@ -17,6 +17,8 @@
 package main
 
 import (
+	"bytes"
+	"crypto/x509"
 	"errors"
 	"flag"
 	"fmt"
@@ -30,11 +32,11 @@ import (
 )
 
 var cmds = map[string]func(*cert.Config, *cert.Manager, ...string) error{
-	"certs":       CmdCerts,
-	"check":       CmdCheck,
-	"list":        CmdList,
-	"renew":       CmdRenew,
-	"self-signed": CmdSelfSigned,
+	"check-certs":      CmdCheckCerts,
+	"check-config":     CmdCheckConfig,
+	"renew":            CmdRenew,
+	"self-signed":      CmdSelfSigned,
+	"show-server-cert": CmdShowServerCert,
 }
 
 var configFileName = flag.String("c", "config.yml",
@@ -57,24 +59,81 @@ func readConfig(fname string) (*cert.Config, error) {
 	return config, nil
 }
 
-func CmdCerts(c *cert.Config, m *cert.Manager, args ...string) error {
-	certs, err := c.Certificates()
+// CmdCheckCerts prints a table with information about all known certificates to
+// stdout.
+func CmdCheckCerts(c *cert.Config, m *cert.Manager, args ...string) error {
+	certs, err := c.CertDomains()
 	if err != nil {
 		return err
 	}
 
+	T := &table{}
+	T.SetHeader("domain", "valid", "expiry time", "server", "comment")
+
 	for _, domains := range certs {
-		fmt.Println(domains[0])
+		mainDomain := domains[0]
+
+		info, err := m.GetCertInfo(mainDomain)
+		if err != nil {
+			return err
+		}
+
+		var tStr string
+		if !info.Expiry.IsZero() {
+			dt := time.Until(info.Expiry)
+			if dt <= 0 {
+				tStr = "expired"
+			} else if dt > 48*time.Hour {
+				tStr = fmt.Sprintf("%.1f days", float64(dt)/float64(24*time.Hour))
+			} else {
+				tStr = dt.Round(time.Second).String()
+			}
+		}
+
+		var sStr string
+		serverCert, err := getServerCertDER(mainDomain)
+		if err != nil {
+			sStr = "error"
+		} else if bytes.Compare(serverCert, info.Raw) != 0 {
+			sStr = "outdated"
+		} else {
+			sStr = "ok"
+		}
+
+		T.AddRow(mainDomain, fmt.Sprint(info.IsValid), tStr, sStr, info.Message)
+
 		for _, domain := range domains[1:] {
-			fmt.Println("  " + domain)
+			valid := info.IsValid
+			msg := ""
+
+			if valid {
+				err = info.Parsed.VerifyHostname(domain)
+				if err != nil {
+					valid = false
+					msg = "domain name not on certificate"
+				}
+			}
+
+			serverCert, err = getServerCertDER(domain)
+			if err != nil {
+				sStr = "error"
+			} else if bytes.Compare(serverCert, info.Raw) != 0 {
+				sStr = "outdated"
+			} else {
+				sStr = "ok"
+			}
+
+			T.AddRow("  "+domain, fmt.Sprint(valid), " \"", sStr, msg)
 		}
 	}
+	T.Show()
+
 	return nil
 }
 
-// CmdCheck checks the data from the configuration file for correctness and
+// CmdCheckConfig checks the data from the configuration file for correctness and
 // consistency.
-func CmdCheck(c *cert.Config, m *cert.Manager, args ...string) error {
+func CmdCheckConfig(c *cert.Config, m *cert.Manager, args ...string) error {
 	var errors []string
 	var warnings []string
 
@@ -248,50 +307,6 @@ func CmdCheck(c *cert.Config, m *cert.Manager, args ...string) error {
 	return err
 }
 
-// CmdList prints a table with information about all known certificates to
-// stdout.
-func CmdList(c *cert.Config, m *cert.Manager, args ...string) error {
-	ff := flag.NewFlagSet("list", flag.ExitOnError)
-	ff.Parse(args)
-
-	domains := ff.Args()
-	if len(domains) == 0 {
-		domains = c.Domains()
-	}
-
-	T := &table{}
-	T.SetHeader("domain", "valid", "expiry time", "comment")
-	for _, site := range c.Sites {
-		domain := site.Domain
-
-		if site.UseKeyOf != "" {
-			T.AddRow(domain, "-", "-",
-				"shares key/cert with "+site.UseKeyOf)
-			continue
-		}
-
-		info, err := m.GetCertInfo([]string{domain})
-		if err != nil {
-			return err
-		}
-
-		var tStr string
-		if !info.Expiry.IsZero() {
-			dt := time.Until(info.Expiry)
-			if dt <= 0 {
-				tStr = "expired"
-			} else if dt > 48*time.Hour {
-				tStr = fmt.Sprintf("%.1f days", float64(dt)/float64(24*time.Hour))
-			} else {
-				tStr = dt.Round(time.Second).String()
-			}
-		}
-		T.AddRow(info.Domain, fmt.Sprint(info.IsValid), tStr, info.Message)
-	}
-	T.Show()
-	return nil
-}
-
 // CmdRenew renews all certificates which are not valid for at least 7 more
 // days.
 func CmdRenew(c *cert.Config, m *cert.Manager, args ...string) error {
@@ -299,13 +314,23 @@ func CmdRenew(c *cert.Config, m *cert.Manager, args ...string) error {
 	force := ff.Bool("f", false, "renew even if the old cert is still good")
 	ff.Parse(args)
 
-	domains := ff.Args()
-	doRenew := make(map[string]bool)
-	for _, site := range domains {
-		doRenew[site] = false
+	requested := ff.Args()
+	known, err := c.CertDomains()
+	if err != nil {
+		return err
 	}
-	for _, domain := range c.Domains() {
-		if _, ok := doRenew[domain]; ok || len(domains) == 0 {
+
+	// doRenew has three possible states for each domain:
+	//   not in map - not requested
+	//   false - requested, but not in configuration file
+	//   true - requested and in configuration file
+	doRenew := make(map[string]bool)
+	for _, site := range requested {
+		doRenew[site] = false // we update this later where needed
+	}
+	for _, domains := range known {
+		domain := domains[0]
+		if _, ok := doRenew[domain]; ok || len(requested) == 0 {
 			doRenew[domain] = true
 		}
 	}
@@ -319,8 +344,13 @@ func CmdRenew(c *cert.Config, m *cert.Manager, args ...string) error {
 	}
 
 	deadline := time.Now().Add(7 * 24 * time.Hour)
-	for domain := range doRenew {
-		info, err := m.GetCertInfo([]string{domain})
+	for _, domains := range known {
+		domain := domains[0]
+		if !doRenew[domain] {
+			continue
+		}
+
+		info, err := m.GetCertInfo(domain)
 		if err != nil {
 			return err
 		}
@@ -337,7 +367,7 @@ func CmdRenew(c *cert.Config, m *cert.Manager, args ...string) error {
 			continue
 		}
 		fmt.Println("renewing", domain)
-		err = m.RenewCertificate([]string{domain})
+		err = m.RenewCertificate(domains)
 		if err != nil {
 			return err
 		}
@@ -357,7 +387,7 @@ func CmdSelfSigned(c *cert.Config, m *cert.Manager, args ...string) error {
 	}
 	for _, domain := range domains {
 		if !*force {
-			info, err := m.GetCertInfo([]string{domain})
+			info, err := m.GetCertInfo(domain)
 			if err != nil {
 				return err
 			}
@@ -370,6 +400,92 @@ func CmdSelfSigned(c *cert.Config, m *cert.Manager, args ...string) error {
 		err := m.InstallSelfSigned(domain, time.Hour)
 		if err != nil {
 			return err
+		}
+	}
+	return nil
+}
+
+// CmdShowServerCert downloads a certificate from a server and displays
+// the data contained.
+func CmdShowServerCert(c *cert.Config, m *cert.Manager, args ...string) error {
+	ff := flag.NewFlagSet("show-server-cert", flag.ExitOnError)
+	ff.Parse(args)
+
+	domains := ff.Args()
+	for _, domain := range domains {
+		chain, err := getServerCertChain(domain)
+		if err != nil {
+			return err
+		} else if len(chain) == 0 {
+			fmt.Print("cannot download server certificate for " + domain + "\n\n")
+			continue
+		}
+
+		fmt.Println(domain+": certificate chain of length", len(chain),
+			"received")
+		for _, cert := range chain {
+			fmt.Println()
+			if len(cert.DNSNames) > 0 {
+				fmt.Println("DNSNames:")
+				for _, name := range cert.DNSNames {
+					fmt.Println("    " + name)
+				}
+			}
+			if len(cert.EmailAddresses) > 0 {
+				fmt.Println("EmailAddresses:")
+				for _, email := range cert.EmailAddresses {
+					fmt.Println("    " + email)
+				}
+			}
+			if len(cert.IPAddresses) > 0 {
+				fmt.Print("IPAddresses:")
+				for _, addr := range cert.IPAddresses {
+					fmt.Print("    " + addr.String())
+				}
+				fmt.Println()
+			}
+			if len(cert.IPAddresses) > 0 {
+				fmt.Print("URIs:")
+				for _, uri := range cert.URIs {
+					fmt.Print("    " + uri.String())
+				}
+				fmt.Println()
+			}
+			fmt.Println("Subject:", cert.Subject)
+			fmt.Println("Issuer:", cert.Issuer)
+			fmt.Println("NotBefore:",
+				cert.NotBefore.Local().Format("2006-01-02 15:04:05"))
+			fmt.Println("NotAfter:",
+				cert.NotAfter.Local().Format("2006-01-02 15:04:05"))
+
+			tab := []*struct {
+				Val  x509.KeyUsage
+				Desc string
+			}{
+				{x509.KeyUsageDigitalSignature, "DigitalSignature"},
+				{x509.KeyUsageContentCommitment, "ContentCommitment"},
+				{x509.KeyUsageKeyEncipherment, "KeyEncipherment"},
+				{x509.KeyUsageDataEncipherment, "DataEncipherment"},
+				{x509.KeyUsageKeyAgreement, "KeyAgreement"},
+				{x509.KeyUsageCertSign, "CertSign"},
+				{x509.KeyUsageCRLSign, "CRLSign"},
+				{x509.KeyUsageEncipherOnly, "EncipherOnly"},
+				{x509.KeyUsageDecipherOnly, "DecipherOnly"},
+			}
+			fmt.Println("KeyUsage:")
+			usage := cert.KeyUsage
+			for _, entry := range tab {
+				if usage&entry.Val != 0 {
+					fmt.Println("    " + entry.Desc)
+					usage &= ^entry.Val
+				}
+			}
+			if usage != 0 {
+				fmt.Printf("    %x (unknown bits)\n", usage)
+			}
+
+			fmt.Println("PublicKeyAlgorithm:", cert.PublicKeyAlgorithm)
+			fmt.Println("SignatureAlgorithm:", cert.SignatureAlgorithm)
 		}
 	}
 	return nil

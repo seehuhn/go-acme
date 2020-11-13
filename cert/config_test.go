@@ -25,7 +25,7 @@ func TestCertificateDomains(t *testing.T) {
 		},
 	}
 
-	lists, err := config.Certificates()
+	lists, err := config.CertDomains()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -39,14 +39,14 @@ func TestCertificateDomains(t *testing.T) {
 	}
 
 	config.Sites[2].UseKeyOf = "d.examples.com"
-	_, err = config.Certificates()
+	_, err = config.CertDomains()
 	if err == nil {
 		t.Error("failed to detect chain of length 2")
 	}
 	config.Sites[2].UseKeyOf = ""
 
 	config.Sites[0].UseKeyOf = "misspelled.examples.com"
-	_, err = config.Certificates()
+	_, err = config.CertDomains()
 	if err == nil {
 		t.Error("failed to detect mis-spelled domain name")
 	}
