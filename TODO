@@ -1,12 +1,16 @@
 - keep track of how much of the rate limit allowance we have used
 - add more unit tests
 - don't abort renewals, when individual sites fail
+- Find a way to report to the caller which certificates need to be
+  reloaded.
 
 - keep a log of events, including all the rate limited ones
 - consider https://letsencrypt.org/2020/11/06/own-two-feet.html
-- change AccountDir to AccountKey???
+- use a deterministic order for the output of "servercert check-certs"
+- use a deterministic order for the commands in "servercert --help"
 - in AcceptTOS, keep track of which terms have been agreed to
+- change AccountDir to AccountKey???
 - allow to restrict "check" to individual domains?
+- in the "check-cert" command, say when a certificate is self-signed
 - implement a "backup" command?
 - add an "account" command??
-- in the "check-cert" command, say when a certificate is self-signed
