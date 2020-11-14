@@ -51,6 +51,7 @@ type Config struct {
 // ConfigSite describes the certificate data for a single domain.
 type ConfigSite struct {
 	Domain   string
+	Port     int    `yaml:",omitempty"` // default is 443
 	UseKeyOf string `yaml:",omitempty"`
 	KeyFile  string `yaml:",omitempty"`
 	CertFile string `yaml:",omitempty"`
@@ -116,6 +117,21 @@ func oneKeyOf(m map[string]bool) string {
 		return key
 	}
 	return ""
+}
+
+// GetPort returns the TCP port where TLS connections using the site
+// certificate can be made.
+func (c *Config) GetPort(domain string) (int, error) {
+	site, err := c.getDomainSite(domain)
+	if err != nil {
+		return 0, err
+	}
+
+	port := site.Port
+	if port == 0 {
+		port = 443
+	}
+	return port, nil
 }
 
 // GetKeyFileName returns the file name for the private key of `domain`.

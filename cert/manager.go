@@ -272,6 +272,8 @@ func checkCertMatchesKey(cert *x509.Certificate, key crypto.Signer) error {
 	return nil
 }
 
+// CheckCert checks that the given certificate is valid for the given domain.
+// This does not take revocations into account.
 func (m *Manager) CheckCert(now time.Time, chain []*x509.Certificate, domain string) (*Info, error) {
 	info := &Info{}
 

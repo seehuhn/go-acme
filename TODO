@@ -1,12 +1,12 @@
 - keep track of how much of the rate limit allowance we have used
+- add more unit tests
 - don't abort renewals, when individual sites fail
-- allow to set the port, e.g. for IMAPS certificates
 
-- consider https://letsencrypt.org/2020/11/06/own-two-feet.html
 - keep a log of events, including all the rate limited ones
+- consider https://letsencrypt.org/2020/11/06/own-two-feet.html
 - change AccountDir to AccountKey???
 - in AcceptTOS, keep track of which terms have been agreed to
 - allow to restrict "check" to individual domains?
-- implement a backup command?
-- add a new "account" command?
-- in the "list" command, say when a certificate is self-signed
+- implement a "backup" command?
+- add an "account" command??
+- in the "check-cert" command, say when a certificate is self-signed

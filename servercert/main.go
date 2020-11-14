@@ -24,6 +24,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
+	"strings"
 	"time"
 
 	"gopkg.in/yaml.v3"
@@ -91,7 +93,11 @@ func CmdCheckCerts(c *cert.Config, m *cert.Manager, args ...string) error {
 		}
 
 		var sStr string
-		serverCert, err := getServerCertDER(mainDomain)
+		port, err := c.GetPort(mainDomain)
+		if err != nil {
+			return err
+		}
+		serverCert, err := getServerCertDER(mainDomain, strconv.Itoa(port))
 		if err != nil {
 			sStr = "error"
 		} else if bytes.Compare(serverCert, info.Cert.Raw) != 0 {
@@ -118,7 +124,11 @@ func CmdCheckCerts(c *cert.Config, m *cert.Manager, args ...string) error {
 				}
 			}
 
-			serverCert, err = getServerCertDER(domain)
+			port, err := c.GetPort(domain)
+			if err != nil {
+				return err
+			}
+			serverCert, err = getServerCertDER(domain, strconv.Itoa(port))
 			if err != nil {
 				sStr = "error"
 			} else if bytes.Compare(serverCert, info.Cert.Raw) != 0 {
@@ -417,7 +427,18 @@ func CmdShowServerCert(c *cert.Config, m *cert.Manager, args ...string) error {
 
 	domains := ff.Args()
 	for _, domain := range domains {
-		chain, err := getServerCertChain(domain)
+		port := 443
+		if strings.Contains(domain, ":") {
+			parts := strings.SplitN(domain, ":", 2)
+			domain = parts[0]
+			p64, err := strconv.ParseUint(parts[1], 10, 16)
+			if err != nil {
+				return err
+			}
+			port = int(p64)
+		}
+
+		chain, err := getServerCertChain(domain, strconv.Itoa(port))
 		if err != nil {
 			return err
 		} else if len(chain) == 0 {
