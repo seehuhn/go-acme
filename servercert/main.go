@@ -1,5 +1,5 @@
-// seehuhn.de/go/acme/servercert - a command line tool to manage TLS certificates
-// Copyright (C) 2020  Jochen Voss <voss@seehuhn.de>
+// seehuhn.de/go/acme/servercert - renew and manage server certificates
+// Copyright (C) 2020  Jochen Voss
 //
 // This program is free software: you can redistribute it and/or modify
 // it under the terms of the GNU General Public License as published by
