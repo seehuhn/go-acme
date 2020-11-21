@@ -114,13 +114,6 @@ func (c *Config) CertDomains() ([][]string, error) {
 	return res, nil
 }
 
-func oneKeyOf(m map[string]bool) string {
-	for key := range m {
-		return key
-	}
-	return ""
-}
-
 // GetTLSPort returns the TCP port where TLS connections using the site
 // certificate can be made.
 func (c *Config) GetTLSPort(domain string) (int, error) {
@@ -294,7 +287,7 @@ func (c *Config) TestChallenge(domain string) error {
 		}
 	}
 
-	if bytes.Compare(token, body) != 0 {
+	if !bytes.Equal(token, body) {
 		return &DomainError{
 			Domain:  domain,
 			Problem: "challenge response body corrupted",

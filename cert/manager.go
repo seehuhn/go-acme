@@ -27,7 +27,6 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
-	"text/template"
 	"time"
 
 	"golang.org/x/crypto/acme"
@@ -44,8 +43,6 @@ type Manager struct {
 
 	accountKey crypto.Signer
 	siteKeys   map[string]crypto.Signer
-
-	webPathTmpl *template.Template
 }
 
 // NewManager creates a new certificate manager.

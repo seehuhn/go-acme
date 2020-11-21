@@ -64,14 +64,6 @@ func loadPrivateKey(fname string) (crypto.Signer, error) {
 	return parsePrivateKey(priv.Bytes)
 }
 
-func loadCert(fname string) ([]byte, error) {
-	chain, err := loadCertChain(fname)
-	if err != nil {
-		return nil, err
-	}
-	return chain[0], nil
-}
-
 func loadCertChain(fname string) ([][]byte, error) {
 	data, err := ioutil.ReadFile(fname)
 	if err != nil {

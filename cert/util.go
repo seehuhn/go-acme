@@ -26,17 +26,6 @@ import (
 	"os"
 )
 
-func isDir(dirName string) error {
-	stat, err := os.Stat(dirName)
-	if err != nil {
-		return err
-	}
-	if !stat.IsDir() {
-		return &FileError{FileName: dirName, Problem: "not a directory"}
-	}
-	return nil
-}
-
 // Attempt to parse the given private key DER block. OpenSSL 0.9.8 generates
 // PKCS#1 private keys by default, while OpenSSL 1.0.0 generates PKCS#8 keys.
 // OpenSSL ecparam generates SEC1 EC private keys for ECDSA. We try all three.

@@ -100,7 +100,7 @@ func CmdCheckCerts(c *cert.Config, m *cert.Manager, args ...string) error {
 		serverCert, err := getServerCertDER(mainDomain, strconv.Itoa(port))
 		if err != nil {
 			sStr = "error"
-		} else if bytes.Compare(serverCert, info.Cert.Raw) != 0 {
+		} else if !bytes.Equal(serverCert, info.Cert.Raw) {
 			sStr = "outdated"
 		} else {
 			sStr = "ok"
@@ -131,7 +131,7 @@ func CmdCheckCerts(c *cert.Config, m *cert.Manager, args ...string) error {
 			serverCert, err = getServerCertDER(domain, strconv.Itoa(port))
 			if err != nil {
 				sStr = "error"
-			} else if bytes.Compare(serverCert, info.Cert.Raw) != 0 {
+			} else if !bytes.Equal(serverCert, info.Cert.Raw) {
 				sStr = "outdated"
 			} else {
 				sStr = "ok"
@@ -203,7 +203,7 @@ func CmdCheckConfig(c *cert.Config, m *cert.Manager, args ...string) error {
 
 		key := "-"
 		cert := "-"
-		challenge := "-"
+		var challenge string
 		msg := ""
 
 		err = c.TestChallenge(domain)

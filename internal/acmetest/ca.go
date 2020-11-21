@@ -63,7 +63,6 @@ type CAServer struct {
 	domainAddr     map[string]string         // domain name to addr:port resolution
 	authorizations map[string]*authorization // keyed by domain name
 	orders         []*order                  // index is used as order ID
-	errors         []error                   // encountered client errors
 }
 
 // NewCAServer creates a new ACME test server and starts serving requests.
@@ -75,10 +74,7 @@ type CAServer struct {
 // If domainsWhitelist is non-empty, the certs will be issued only for the specified
 // list of domains. Otherwise, any domain name is allowed.
 func NewCAServer(challengeTypes []string, domainsWhitelist []string) *CAServer {
-	var whitelist []string
-	for _, name := range domainsWhitelist {
-		whitelist = append(whitelist, name)
-	}
+	whitelist := append([]string{}, domainsWhitelist...)
 	sort.Strings(whitelist)
 	ca := &CAServer{
 		challengeTypes:   challengeTypes,
