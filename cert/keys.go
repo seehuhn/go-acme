@@ -22,13 +22,11 @@ import (
 	"crypto/elliptic"
 	"crypto/rand"
 	"crypto/x509"
-	"crypto/x509/pkix"
 	"encoding/pem"
 	"io/ioutil"
 	"math/big"
 	"os"
 	"strings"
-	"time"
 )
 
 // loadOrCreatePrivateKey loads the account key from disk, or generates
@@ -64,37 +62,6 @@ func loadPrivateKey(fname string) (crypto.Signer, error) {
 		return nil, errInvalidKey
 	}
 	return parsePrivateKey(priv.Bytes)
-}
-
-// getDERCert loads the site certificate in DER format.  If no certificate
-// is found, generate a short-lived, self-signed certificate instead.
-func getDERCert(fname, domain string, privKey crypto.Signer) ([]byte, error) {
-	caCertDER, err := loadCert(fname)
-	if !os.IsNotExist(err) {
-		return caCertDER, err
-	}
-
-	// Generate a self-signed certificate
-	tmpl := &x509.Certificate{
-		Subject:      pkix.Name{CommonName: domain},
-		SerialNumber: newSerialNum(),
-		NotBefore:    time.Now(),
-		NotAfter:     time.Now().Add(time.Hour),
-		// DNSNames:     []string{domain},
-		KeyUsage: x509.KeyUsageKeyEncipherment |
-			x509.KeyUsageDigitalSignature,
-		ExtKeyUsage: []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
-	}
-	caCertDER, err = x509.CreateCertificate(rand.Reader, tmpl, tmpl,
-		privKey.Public(), privKey)
-	if err != nil {
-		return nil, err
-	}
-	err = writePEM(fname, [][]byte{caCertDER}, "CERTIFICATE", 0644)
-	if err != nil {
-		return nil, err
-	}
-	return caCertDER, nil
 }
 
 func loadCert(fname string) ([]byte, error) {

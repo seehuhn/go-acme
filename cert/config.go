@@ -51,11 +51,13 @@ type Config struct {
 // ConfigSite describes the certificate data for a single domain.
 type ConfigSite struct {
 	Domain   string
-	Port     int    `yaml:",omitempty"` // default is 443
+	TLSPort  int    `yaml:",omitempty"` // default is 443
 	UseKeyOf string `yaml:",omitempty"`
 	KeyFile  string `yaml:",omitempty"`
 	CertFile string `yaml:",omitempty"`
 	WebRoot  string `yaml:",omitempty"`
+
+	testingHost string // host:port where webroot can be accessed via HTTP
 }
 
 // Domains returns all domain names in the configuration data.
@@ -119,15 +121,15 @@ func oneKeyOf(m map[string]bool) string {
 	return ""
 }
 
-// GetPort returns the TCP port where TLS connections using the site
+// GetTLSPort returns the TCP port where TLS connections using the site
 // certificate can be made.
-func (c *Config) GetPort(domain string) (int, error) {
+func (c *Config) GetTLSPort(domain string) (int, error) {
 	site, err := c.getDomainSite(domain)
 	if err != nil {
 		return 0, err
 	}
 
-	port := site.Port
+	port := site.TLSPort
 	if port == 0 {
 		port = 443
 	}
@@ -161,7 +163,7 @@ func (c *Config) GetKeyFileName(domain string) (string, error) {
 	return c.runTemplate(c.keyFileTmpl, site)
 }
 
-// GetCertFileName returns the file name for the certificate of site `i`.
+// GetCertFileName returns the file name for the certificate `domain`.
 func (c *Config) GetCertFileName(domain string) (string, error) {
 	site, err := c.getDomainSite(domain)
 	if err != nil {
@@ -188,8 +190,9 @@ func (c *Config) GetCertFileName(domain string) (string, error) {
 	return c.runTemplate(c.certFileTmpl, site)
 }
 
-// GetWebRoot returns the path of directory which corresponds to the
-// root of the file tree served by site `i`.
+// GetWebRoot returns the path of directory which corresponds to the root of
+// the file tree served for `domain`.  Only paths starting with
+// `/.well-known/acme-challenge/` are required to work.
 func (c *Config) GetWebRoot(domain string) (string, error) {
 	site, err := c.getDomainSite(domain)
 	if err != nil {
@@ -201,6 +204,13 @@ func (c *Config) GetWebRoot(domain string) (string, error) {
 	}
 
 	if c.webRootTmpl == nil {
+		if c.DefaultWebRoot == "" {
+			return "", &DomainError{
+				Domain:  domain,
+				Problem: "WebRoot not set and no default",
+			}
+		}
+
 		tmpl := template.New("webRoot")
 		tmpl, err := tmpl.Parse(c.DefaultWebRoot)
 		if err != nil {
@@ -257,7 +267,11 @@ func (c *Config) TestChallenge(domain string) error {
 	}
 	defer os.Remove(fname)
 
-	resp, err := http.Get("http://" + domain + "/" + urlPath)
+	httpDomain := domain
+	if site, _ := c.getDomainSite(domain); site != nil && site.testingHost != "" {
+		httpDomain = site.testingHost
+	}
+	resp, err := http.Get("http://" + httpDomain + "/" + urlPath)
 	if resp != nil {
 		defer resp.Body.Close()
 	}

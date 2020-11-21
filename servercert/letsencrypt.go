@@ -1,4 +1,4 @@
-// seehuhn.de/go/acme/cert - renew and manage server certificates
+// seehuhn.de/go/acme/servercert - renew and manage server certificates
 // Copyright (C) 2020  Jochen Voss
 //
 // This program is free software: you can redistribute it and/or modify
@@ -14,7 +14,7 @@
 // You should have received a copy of the GNU General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-package cert
+package main
 
 // defaultACMEDirectory is the default ACME Directory URL.
 const defaultACMEDirectory = "https://acme-v02.api.letsencrypt.org/directory"

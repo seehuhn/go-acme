@@ -30,6 +30,7 @@ import (
 	"encoding/pem"
 	"fmt"
 	"io"
+	"io/ioutil"
 	"log"
 	"math/big"
 	"net/http"
@@ -168,7 +169,13 @@ type challenge struct {
 	Token string `json:"token"`
 }
 
+type authzID struct {
+	Type  string `json:"type"`
+	Value string `json:"value"`
+}
+
 type authorization struct {
+	Identifier authzID
 	Status     string      `json:"status"`
 	Challenges []challenge `json:"challenges"`
 
@@ -285,7 +292,20 @@ func (ca *CAServer) handle(w http.ResponseWriter, r *http.Request) {
 		go ca.validateChallenge("tls-alpn-01", domain)
 		w.Write([]byte("{}"))
 
-	// Get authorization status requests.
+		// Accept http-01 challenge type requests.
+	case strings.HasPrefix(r.URL.Path, "/challenge/http-01/"):
+		domain := strings.TrimPrefix(r.URL.Path, "/challenge/http-01/")
+		ca.mu.Lock()
+		_, exist := ca.authorizations[domain]
+		ca.mu.Unlock()
+		if !exist {
+			ca.httpErrorf(w, http.StatusBadRequest, "challenge accept: no authz for %q", domain)
+			return
+		}
+		go ca.validateChallenge("http-01", domain)
+		w.Write([]byte("{}"))
+
+		// Get authorization status requests.
 	case strings.HasPrefix(r.URL.Path, "/authz/"):
 		domain := strings.TrimPrefix(r.URL.Path, "/authz/")
 		ca.mu.Lock()
@@ -406,6 +426,10 @@ func (ca *CAServer) authz(identifier string) *authorization {
 	authz, ok := ca.authorizations[identifier]
 	if !ok {
 		authz = &authorization{
+			Identifier: authzID{
+				Type:  "dns",
+				Value: identifier,
+			},
 			domain: identifier,
 			Status: acme.StatusPending,
 		}
@@ -457,12 +481,14 @@ func (ca *CAServer) leafCert(csr *x509.CertificateRequest) (der []byte, err erro
 	return x509.CreateCertificate(rand.Reader, leaf, ca.rootTemplate, csr.PublicKey, ca.rootKey)
 }
 
-// TODO: Only tls-alpn-01 is currently supported: implement http-01 and dns-01.
+// TODO: Only tls-alpn-01 and http-01 are currently supported; implement dns-01.
 func (ca *CAServer) validateChallenge(typ, identifier string) {
 	var err error
 	switch typ {
 	case "tls-alpn-01":
 		err = ca.verifyALPNChallenge(identifier)
+	case "http-01":
+		err = ca.verifyHTTPChallenge(identifier)
 	default:
 		panic(fmt.Sprintf("validation of %q is not implemented", typ))
 	}
@@ -530,6 +556,31 @@ func (ca *CAServer) verifyALPNChallenge(domain string) error {
 		return fmt.Errorf("len(PeerCertificates) = %d; want 1", n)
 	}
 	// TODO: verify conn.ConnectionState().PeerCertificates[0]
+	return nil
+}
+
+func (ca *CAServer) verifyHTTPChallenge(domain string) error {
+	addr, err := ca.addr(domain)
+	if err != nil {
+		return err
+	}
+	token := challengeToken(domain, "http-01")
+	resp, err := http.Get("http://" + addr + "/.well-known/acme-challenge/" + token)
+	if err != nil {
+		return err
+	}
+	if resp.StatusCode != 200 {
+		return fmt.Errorf("cannot read challenge response: status %d",
+			resp.StatusCode)
+	}
+	body, err := ioutil.ReadAll(resp.Body)
+	if err != nil {
+		return err
+	}
+
+	fmt.Println(string(body))
+	_ = body // TODO(voss): check body
+
 	return nil
 }
 

@@ -35,8 +35,8 @@ import (
 
 const accountKeyName = "account.key"
 
-// Manager holds all state required to generate and/or renew certificates
-// via Let's Encrypt.
+// Manager holds all state required to generate and/or renew certificates via
+// an ACME server.
 type Manager struct {
 	directory string
 	config    *Config
@@ -49,17 +49,7 @@ type Manager struct {
 }
 
 // NewManager creates a new certificate manager.
-func NewManager(config *Config, debug bool) (*Manager, error) {
-	roots, err := x509.SystemCertPool()
-	if err != nil {
-		return nil, err
-	}
-	directory := defaultACMEDirectory
-	if debug {
-		directory = debugACMEDirectory
-		roots.AppendCertsFromPEM([]byte(fakeRootCert))
-	}
-
+func NewManager(config *Config, directory string, roots *x509.CertPool) (*Manager, error) {
 	return &Manager{
 		directory: directory,
 		config:    config,

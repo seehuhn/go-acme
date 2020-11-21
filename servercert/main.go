@@ -93,7 +93,7 @@ func CmdCheckCerts(c *cert.Config, m *cert.Manager, args ...string) error {
 		}
 
 		var sStr string
-		port, err := c.GetPort(mainDomain)
+		port, err := c.GetTLSPort(mainDomain)
 		if err != nil {
 			return err
 		}
@@ -124,7 +124,7 @@ func CmdCheckCerts(c *cert.Config, m *cert.Manager, args ...string) error {
 				}
 			}
 
-			port, err := c.GetPort(domain)
+			port, err := c.GetTLSPort(domain)
 			if err != nil {
 				return err
 			}
@@ -602,7 +602,17 @@ func main() {
 		os.Exit(1)
 	}
 
-	m, err := cert.NewManager(config, *debug)
+	directory := defaultACMEDirectory
+	roots, err := x509.SystemCertPool()
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err.Error())
+		os.Exit(1)
+	}
+	if *debug {
+		directory = debugACMEDirectory
+		roots.AppendCertsFromPEM([]byte(fakeRootCert))
+	}
+	m, err := cert.NewManager(config, directory, roots)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err.Error())
 		os.Exit(1)
