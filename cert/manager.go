@@ -60,6 +60,7 @@ func NewManager(config *Config, directory string, roots *x509.CertPool) (*Manage
 // system.
 type Info struct {
 	Cert      *x509.Certificate
+	Chains    [][]*x509.Certificate
 	IsValid   bool
 	IsMissing bool
 	Expiry    time.Time
@@ -284,13 +285,14 @@ func (m *Manager) CheckCert(now time.Time, chain []*x509.Certificate, domain str
 		Intermediates: intermediates,
 		CurrentTime:   now,
 	}
-	_, err := siteCert.Verify(opts)
+	chains, err := siteCert.Verify(opts)
 	if err != nil {
 		info.Message = err.Error()
 		return info, nil
 	}
 
 	info.IsValid = true
+	info.Chains = chains
 
 	return info, nil
 }
