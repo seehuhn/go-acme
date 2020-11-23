@@ -27,6 +27,7 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"sort"
 	"strings"
 	"text/template"
 )
@@ -111,6 +112,9 @@ func (c *Config) CertDomains() ([][]string, error) {
 	for _, domains := range head {
 		res = append(res, domains)
 	}
+	sort.Slice(res, func(i, j int) bool {
+		return stringSliceLess(res[i], res[j])
+	})
 	return res, nil
 }
 

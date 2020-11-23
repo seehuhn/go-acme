@@ -24,6 +24,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -34,7 +35,7 @@ import (
 )
 
 var cmds = map[string]func(*cert.Config, *cert.Manager, ...string) error{
-	"check-certs":      CmdCheckCerts,
+	"check-cert":       CmdCheckCert,
 	"check-config":     CmdCheckConfig,
 	"renew":            CmdRenew,
 	"self-signed":      CmdSelfSigned,
@@ -61,9 +62,9 @@ func readConfig(fname string) (*cert.Config, error) {
 	return config, nil
 }
 
-// CmdCheckCerts prints a table with information about all known certificates to
+// CmdCheckCert prints a table with information about all known certificates to
 // stdout.
-func CmdCheckCerts(c *cert.Config, m *cert.Manager, args ...string) error {
+func CmdCheckCert(c *cert.Config, m *cert.Manager, args ...string) error {
 	certs, err := c.CertDomains()
 	if err != nil {
 		return err
@@ -458,7 +459,8 @@ func CmdShowServerCert(c *cert.Config, m *cert.Manager, args ...string) error {
 		for i, chain := range info.Chains {
 			if i > 0 {
 				fmt.Println()
-				fmt.Println("alternative certificate chain:")
+				fmt.Println()
+				fmt.Println("*** alternative certificate chain:")
 			}
 			for _, cert := range chain {
 				fmt.Println()
@@ -481,7 +483,12 @@ func main() {
 		fmt.Fprintln(flag.CommandLine.Output(), "Valid options are:")
 		flag.PrintDefaults()
 		fmt.Fprintln(flag.CommandLine.Output(), "\nCommand must be one of")
+		var keys []string
 		for key := range cmds {
+			keys = append(keys, key)
+		}
+		sort.Strings(keys)
+		for _, key := range keys {
 			fmt.Println("    " + key)
 		}
 		fmt.Fprintf(flag.CommandLine.Output(),

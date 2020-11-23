@@ -70,3 +70,18 @@ func writePEM(fname string, chain [][]byte, Type string, perm os.FileMode) error
 	}
 	return nil
 }
+
+func stringSliceLess(a, b []string) bool {
+	for n := 0; ; n++ {
+		if len(b) <= n {
+			return false
+		} else if len(a) <= n {
+			return true
+		}
+		if a[n] < b[n] {
+			return true
+		} else if a[n] > b[n] {
+			return false
+		}
+	}
+}

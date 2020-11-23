@@ -121,10 +121,15 @@ func (m *Manager) InstallSelfSigned(domain string, expiry time.Duration) error {
 // RenewCertificate requests and installs a new certificate for the given
 // set of domains.
 func (m *Manager) RenewCertificate(domains []string) error {
+	err := checkQuota(domains)
+	if err != nil {
+		return err
+	}
+
 	// Make sure we can respond to challenges before using any
 	// of our allowance with the ACME provider.
 	for _, domain := range domains {
-		err := m.config.TestChallenge(domain)
+		err = m.config.TestChallenge(domain)
 		if err != nil {
 			return err
 		}
