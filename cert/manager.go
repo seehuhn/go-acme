@@ -121,19 +121,16 @@ func (m *Manager) InstallSelfSigned(domain string, expiry time.Duration) error {
 // RenewCertificate requests and installs a new certificate for the given
 // set of domains.
 func (m *Manager) RenewCertificate(domains []string) error {
-	err := checkQuota(domains)
-	if err != nil {
-		return err
-	}
-
 	// Make sure we can respond to challenges before using any
 	// of our allowance with the ACME provider.
 	for _, domain := range domains {
-		err = m.config.TestChallenge(domain)
+		err := m.config.TestChallenge(domain)
 		if err != nil {
 			return err
 		}
 	}
+
+	// TODO(voss): check the error handling below
 
 	csr, err := m.getCSR(domains)
 	if err != nil {
@@ -146,10 +143,12 @@ func (m *Manager) RenewCertificate(domains []string) error {
 	if err != nil {
 		return err
 	}
-	order, err := m.getOrder(ctx, client, domains)
+
+	order, err := m.authorize(ctx, client, domains)
 	if err != nil {
 		return err
 	}
+
 	chainDER, _, err := client.CreateOrderCert(ctx, order.FinalizeURL, csr, true)
 	if err != nil {
 		return err
@@ -160,6 +159,11 @@ func (m *Manager) RenewCertificate(domains []string) error {
 	}
 	if !info.IsValid {
 		return errors.New("received invalid certificate: " + info.Message)
+	}
+
+	err = updateQuotaCerts(domains)
+	if err != nil {
+		return err
 	}
 
 	certPath, err := m.config.GetCertFileName(domains[0])
@@ -324,7 +328,7 @@ func (m *Manager) getClient(ctx context.Context) (*acme.Client, error) {
 	return client, nil
 }
 
-func (m *Manager) getOrder(ctx context.Context, client *acme.Client,
+func (m *Manager) authorize(ctx context.Context, client *acme.Client,
 	domains []string) (*acme.Order, error) {
 	order, err := client.AuthorizeOrder(ctx, acme.DomainIDs(domains...))
 	if err != nil {
@@ -387,5 +391,9 @@ func (m *Manager) authorizeOne(ctx context.Context, client *acme.Client, authzUR
 	}
 
 	_, err = client.WaitAuthorization(ctx, auth.URI)
+	if err != nil {
+		// TODO(voss): check the error
+		updateQuotaFailed(domain)
+	}
 	return err
 }

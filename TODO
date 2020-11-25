@@ -1,16 +1,16 @@
 - keep track of how much of the rate limit allowance we have used
+- in AcceptTOS, keep track of which terms have been agreed to
 
-- don't abort renewals, when individual sites fail?
 - Find a way to report to the caller which certificates need to be
   reloaded.
+- make sure we won't accumulate pending authorizations
+- in the "check-cert" command, say when a certificate is self-signed
 - add documentation
 
-- in AcceptTOS, keep track of which terms have been agreed to
+- don't abort renewals, when individual sites fail?
 - keep a log of events, including all the rate limited ones
 - add more unit tests
 - consider https://letsencrypt.org/2020/11/06/own-two-feet.html
-- change AccountDir to AccountKey???
 - allow to restrict "check" to individual domains?
-- in the "check-cert" command, say when a certificate is self-signed
-- backup replaced but still valid certificates?
-- add revocation
+- keep a backup of replaced but still valid certificates?
+- add revocations
