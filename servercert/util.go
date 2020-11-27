@@ -21,6 +21,7 @@ import (
 	"crypto/x509"
 	"fmt"
 	"os"
+	"strings"
 )
 
 func isFile(fname string) (os.FileMode, error) {
@@ -56,39 +57,40 @@ func getServerCertChain(domain, port string) ([]*x509.Certificate, error) {
 	return conn.ConnectionState().PeerCertificates, nil
 }
 
-func printCert(cert *x509.Certificate) {
+func printCert(cert *x509.Certificate, head, pad string) {
+	pp := func(parts ...string) {
+		parts = append([]string{head + parts[0]}, parts[1:]...)
+		fmt.Println(strings.Join(parts, " "))
+		head = pad
+	}
+
 	if len(cert.DNSNames) > 0 {
-		fmt.Println("DNSNames:")
+		pp("DNSNames:")
 		for _, name := range cert.DNSNames {
-			fmt.Println("    " + name)
+			pp("    " + name)
 		}
 	}
 	if len(cert.EmailAddresses) > 0 {
-		fmt.Println("EmailAddresses:")
+		pp("EmailAddresses:")
 		for _, email := range cert.EmailAddresses {
-			fmt.Println("    " + email)
+			pp("    " + email)
 		}
 	}
 	if len(cert.IPAddresses) > 0 {
-		fmt.Print("IPAddresses:")
+		pp("IPAddresses:")
 		for _, addr := range cert.IPAddresses {
-			fmt.Print("    " + addr.String())
+			pp("    " + addr.String())
 		}
-		fmt.Println()
 	}
 	if len(cert.IPAddresses) > 0 {
-		fmt.Print("URIs:")
+		pp("URIs:")
 		for _, uri := range cert.URIs {
-			fmt.Print("    " + uri.String())
+			pp("    " + uri.String())
 		}
-		fmt.Println()
 	}
-	fmt.Println("Subject:", cert.Subject)
-	fmt.Println("Issuer:", cert.Issuer)
-	fmt.Println("NotBefore:",
-		cert.NotBefore.Local().Format("2006-01-02 15:04:05"))
-	fmt.Println("NotAfter:",
-		cert.NotAfter.Local().Format("2006-01-02 15:04:05"))
+	pp("Subject:", cert.Subject.String())
+	pp("Valid:", cert.NotBefore.Local().Format("2006-01-02 15:04:05"),
+		"to", cert.NotAfter.Local().Format("2006-01-02 15:04:05"))
 
 	tab := []*struct {
 		Val  x509.KeyUsage
@@ -104,56 +106,53 @@ func printCert(cert *x509.Certificate) {
 		{x509.KeyUsageEncipherOnly, "EncipherOnly"},
 		{x509.KeyUsageDecipherOnly, "DecipherOnly"},
 	}
-	fmt.Println("KeyUsage:")
+	pp("KeyUsage:")
 	usage := cert.KeyUsage
 	for _, entry := range tab {
 		if usage&entry.Val != 0 {
-			fmt.Println("    " + entry.Desc)
+			pp("    " + entry.Desc)
 			usage &= ^entry.Val
 		}
 	}
 	if usage != 0 {
-		fmt.Printf("    %x (unknown bits)\n", usage)
+		pp(fmt.Sprintf("    %x (unknown bits)\n", usage))
 	}
 
 	if len(cert.ExtKeyUsage) > 0 {
-		fmt.Println("ExtKeyUsage:")
+		pp("ExtKeyUsage:")
 		for _, usage := range cert.ExtKeyUsage {
 			switch usage {
 			case x509.ExtKeyUsageAny:
-				fmt.Println("    Any")
+				pp("    Any")
 			case x509.ExtKeyUsageServerAuth:
-				fmt.Println("    ServerAuth")
+				pp("    ServerAuth")
 			case x509.ExtKeyUsageClientAuth:
-				fmt.Println("    ClientAuth")
+				pp("    ClientAuth")
 			case x509.ExtKeyUsageCodeSigning:
-				fmt.Println("    CodeSigning")
+				pp("    CodeSigning")
 			case x509.ExtKeyUsageEmailProtection:
-				fmt.Println("    EmailProtection")
+				pp("    EmailProtection")
 			case x509.ExtKeyUsageIPSECEndSystem:
-				fmt.Println("    IPSECEndSystem")
+				pp("    IPSECEndSystem")
 			case x509.ExtKeyUsageIPSECTunnel:
-				fmt.Println("    IPSECTunnel")
+				pp("    IPSECTunnel")
 			case x509.ExtKeyUsageIPSECUser:
-				fmt.Println("    IPSECUser")
+				pp("    IPSECUser")
 			case x509.ExtKeyUsageTimeStamping:
-				fmt.Println("    TimeStamping")
+				pp("    TimeStamping")
 			case x509.ExtKeyUsageOCSPSigning:
-				fmt.Println("    OCSPSigning")
+				pp("    OCSPSigning")
 			case x509.ExtKeyUsageMicrosoftServerGatedCrypto:
-				fmt.Println("    MicrosoftServerGatedCrypto")
+				pp("    MicrosoftServerGatedCrypto")
 			case x509.ExtKeyUsageNetscapeServerGatedCrypto:
-				fmt.Println("    NetscapeServerGatedCrypto")
+				pp("    NetscapeServerGatedCrypto")
 			case x509.ExtKeyUsageMicrosoftCommercialCodeSigning:
-				fmt.Println("    MicrosoftCommercialCodeSigning")
+				pp("    MicrosoftCommercialCodeSigning")
 			case x509.ExtKeyUsageMicrosoftKernelCodeSigning:
-				fmt.Println("    MicrosoftKernelCodeSigning")
+				pp("    MicrosoftKernelCodeSigning")
 			default:
-				fmt.Printf("    unknown %d\n", usage)
+				pp(fmt.Sprintf("    unknown %d\n", usage))
 			}
 		}
 	}
-
-	fmt.Println("PublicKeyAlgorithm:", cert.PublicKeyAlgorithm)
-	fmt.Println("SignatureAlgorithm:", cert.SignatureAlgorithm)
 }

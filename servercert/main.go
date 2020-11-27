@@ -452,7 +452,7 @@ func CmdShowServerCert(c *cert.Config, m *cert.Manager, args ...string) error {
 			return err
 		}
 		if !info.IsValid {
-			fmt.Println("\nINVALID CERTIFICATE: " + info.Message)
+			fmt.Println("\nINVALID CERTIFICATE:\n" + info.Message)
 			continue
 		}
 
@@ -462,9 +462,9 @@ func CmdShowServerCert(c *cert.Config, m *cert.Manager, args ...string) error {
 				fmt.Println()
 				fmt.Println("*** alternative certificate chain:")
 			}
-			for _, cert := range chain {
+			for j, cert := range chain {
 				fmt.Println()
-				printCert(cert)
+				printCert(cert, fmt.Sprintf("%-4d", j+1), "    ")
 			}
 		}
 	}
