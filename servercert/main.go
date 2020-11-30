@@ -525,6 +525,7 @@ func main() {
 	if *debug {
 		directory = debugACMEDirectory
 		roots.AppendCertsFromPEM([]byte(fakeRootCert))
+		config.AccountDir = filepath.Join(config.AccountDir, "debug")
 	}
 	m, err := cert.NewManager(config, directory, roots)
 	if err != nil {

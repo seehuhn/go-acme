@@ -26,6 +26,16 @@ import (
 	"os"
 )
 
+func isDir(dirName string) (bool, error) {
+	stat, err := os.Stat(dirName)
+	if os.IsNotExist(err) {
+		return false, nil
+	} else if err != nil {
+		return false, err
+	}
+	return stat.IsDir(), nil
+}
+
 // Attempt to parse the given private key DER block. OpenSSL 0.9.8 generates
 // PKCS#1 private keys by default, while OpenSSL 1.0.0 generates PKCS#8 keys.
 // OpenSSL ecparam generates SEC1 EC private keys for ECDSA. We try all three.
@@ -52,7 +62,7 @@ func parsePrivateKey(der []byte) (crypto.Signer, error) {
 	return nil, errors.New("acme/autoc: failed to parse private key")
 }
 
-func writePEM(fname string, chain [][]byte, Type string, perm os.FileMode) error {
+func writePEM(fname string, dataDER [][]byte, Type string, perm os.FileMode) error {
 	fd, err := os.OpenFile(fname,
 		os.O_WRONLY|os.O_CREATE|os.O_TRUNC,
 		perm)
@@ -61,7 +71,7 @@ func writePEM(fname string, chain [][]byte, Type string, perm os.FileMode) error
 	}
 	defer fd.Close()
 
-	for _, part := range chain {
+	for _, part := range dataDER {
 		block := &pem.Block{Bytes: part, Type: Type}
 		err = pem.Encode(fd, block)
 		if err != nil {

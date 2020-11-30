@@ -34,6 +34,8 @@ import (
 
 const accountKeyName = "account.key"
 
+const acmeTimeout = 10 * time.Second
+
 // Manager holds all state required to generate and/or renew certificates via
 // an ACME server.
 type Manager struct {
@@ -137,7 +139,8 @@ func (m *Manager) RenewCertificate(domains []string) error {
 		return err
 	}
 
-	ctx := context.TODO()
+	ctx, cancel := context.WithTimeout(context.Background(), acmeTimeout)
+	defer cancel()
 
 	client, err := m.getClient(ctx)
 	if err != nil {
@@ -145,6 +148,8 @@ func (m *Manager) RenewCertificate(domains []string) error {
 	}
 
 	order, err := m.authorize(ctx, client, domains)
+	// TODO(voss): if we hit the rate limit, `acme.RateLimit(err)` will be true
+	// here.
 	if err != nil {
 		return err
 	}
@@ -161,7 +166,7 @@ func (m *Manager) RenewCertificate(domains []string) error {
 		return errors.New("received invalid certificate: " + info.Message)
 	}
 
-	err = updateQuotaCerts(domains)
+	err = m.updateQuotaCerts(info.Cert, chainDER)
 	if err != nil {
 		return err
 	}
@@ -392,8 +397,12 @@ func (m *Manager) authorizeOne(ctx context.Context, client *acme.Client, authzUR
 
 	_, err = client.WaitAuthorization(ctx, auth.URI)
 	if err != nil {
-		// TODO(voss): check the error
-		updateQuotaFailed(domain)
+		// TODO(voss): inspect the error
+
+		err = updateQuotaFailed(time.Now(), domain)
+		if err != nil {
+			return err
+		}
 	}
 	return err
 }

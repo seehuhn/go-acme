@@ -319,11 +319,16 @@ func (c *Config) getDomainSite(domain string) (*ConfigSite, error) {
 	return idx, nil
 }
 
+func (c *Config) certDir() string {
+	return filepath.Join(c.AccountDir, "certs")
+}
+
 func (c *Config) runTemplate(tmpl *template.Template, site *ConfigSite) (string, error) {
 	domain := site.Domain
 	noWWW := strings.TrimPrefix(domain, "www.")
 	first := strings.SplitN(noWWW, ".", 2)[0]
 	buf := &bytes.Buffer{}
+	// TODO(voss): also split at publicsuffix?
 	err := tmpl.Execute(buf, map[string]interface{}{
 		"Domain": domain,
 		"NoWWW":  noWWW,
