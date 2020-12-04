@@ -65,27 +65,34 @@ func readConfig(fname string) (*cert.Config, error) {
 // CmdCheckCert prints a table with information about all known certificates to
 // stdout.
 func CmdCheckCert(c *cert.Config, m *cert.Manager, args ...string) error {
+	var errors []string
+	var warnings []string
+
 	certs, err := c.CertDomains()
 	if err != nil {
 		return err
 	}
 
+	now := time.Now()
+
 	T := &table{}
 	T.SetHeader("domain", "valid", "expiry time", "server", "comment")
-
 	for _, domains := range certs {
 		mainDomain := domains[0]
 
-		info, err := m.GetCertInfo(mainDomain)
+		info, err := m.GetCertInfo(mainDomain, now)
 		if err != nil {
 			return err
 		}
 
 		var tStr string
 		if !info.Expiry.IsZero() {
-			dt := time.Until(info.Expiry)
+			dt := info.Expiry.Sub(now)
 			if dt <= 0 {
 				tStr = "expired"
+				warnings = append(warnings,
+					fmt.Sprintf("%s: certificate expired %.1f days ago",
+						mainDomain, -dt.Hours()/24))
 			} else if dt > 48*time.Hour {
 				tStr = fmt.Sprintf("%.1f days", float64(dt)/float64(24*time.Hour))
 			} else {
@@ -93,18 +100,40 @@ func CmdCheckCert(c *cert.Config, m *cert.Manager, args ...string) error {
 			}
 		}
 
-		var sStr string
-		port, err := c.GetTLSPort(mainDomain)
+		checkOne := func(domain string) (string, error) {
+			var sStr string
+			port, err := c.GetTLSPort(domain)
+			if err != nil {
+				return "", err
+			}
+			serverCertChain, err := getServerCertChain(domain, strconv.Itoa(port))
+			if err != nil {
+				sStr = "error"
+				errors = append(errors, domain+": "+err.Error())
+			} else if len(serverCertChain) == 0 {
+				sStr = "missing"
+			} else if bytes.Equal(serverCertChain[0].Raw, info.Cert.Raw) {
+				sStr = "ok"
+			} else if err := serverCertChain[0].VerifyHostname(domain); err != nil {
+				errors = append(errors, domain+": "+err.Error())
+			} else if info, err := m.CheckCert(now, serverCertChain, domain); err != nil || !info.IsValid {
+				sStr = "invalid"
+				if err != nil {
+					errors = append(errors, domain+": "+err.Error())
+				} else {
+					errors = append(errors, domain+": "+info.Message)
+				}
+			} else {
+				sStr = "outdated"
+				errors = append(errors,
+					domain+": served certificate differs from certificate file")
+			}
+			return sStr, nil
+		}
+
+		sStr, err := checkOne(mainDomain)
 		if err != nil {
 			return err
-		}
-		serverCert, err := getServerCertDER(mainDomain, strconv.Itoa(port))
-		if err != nil {
-			sStr = "error"
-		} else if !bytes.Equal(serverCert, info.Cert.Raw) {
-			sStr = "outdated"
-		} else {
-			sStr = "ok"
 		}
 
 		msg := info.Message
@@ -122,20 +151,13 @@ func CmdCheckCert(c *cert.Config, m *cert.Manager, args ...string) error {
 				if err != nil {
 					valid = false
 					msg = "domain name not on certificate"
+					errors = append(errors, domain+": "+err.Error())
 				}
 			}
 
-			port, err := c.GetTLSPort(domain)
+			sStr, err = checkOne(domain)
 			if err != nil {
 				return err
-			}
-			serverCert, err = getServerCertDER(domain, strconv.Itoa(port))
-			if err != nil {
-				sStr = "error"
-			} else if !bytes.Equal(serverCert, info.Cert.Raw) {
-				sStr = "outdated"
-			} else {
-				sStr = "ok"
 			}
 
 			T.AddRow("  "+domain, fmt.Sprint(valid), " \"", sStr, msg)
@@ -143,7 +165,25 @@ func CmdCheckCert(c *cert.Config, m *cert.Manager, args ...string) error {
 	}
 	T.Show()
 
-	return nil
+	if len(warnings) > 0 {
+		fmt.Print("\nWarnings:\n")
+		for _, w := range warnings {
+			fmt.Println("- " + w)
+		}
+	}
+
+	if len(errors) > 0 {
+		fmt.Print("\nErrors:\n")
+		for _, e := range errors {
+			fmt.Println("- " + e)
+		}
+		err = fmt.Errorf("%d errors / %d warnings", len(errors), len(warnings))
+	} else {
+		err = nil
+	}
+	fmt.Println()
+
+	return err
 }
 
 // CmdCheckConfig checks the data from the configuration file for correctness and
@@ -358,14 +398,15 @@ func CmdRenew(c *cert.Config, m *cert.Manager, args ...string) error {
 		}
 	}
 
-	deadline := time.Now().Add(7 * 24 * time.Hour)
+	now := time.Now()
+	deadline := now.Add(7 * 24 * time.Hour)
 	for _, domains := range known {
 		domain := domains[0]
 		if !doRenew[domain] {
 			continue
 		}
 
-		info, err := m.GetCertInfo(domain)
+		info, err := m.GetCertInfo(domain, now)
 		if err != nil {
 			return err
 		}
@@ -400,9 +441,10 @@ func CmdSelfSigned(c *cert.Config, m *cert.Manager, args ...string) error {
 	if len(domains) == 0 {
 		return errors.New("no domains given")
 	}
+	now := time.Now()
 	for _, domain := range domains {
 		if !*force {
-			info, err := m.GetCertInfo(domain)
+			info, err := m.GetCertInfo(domain, now)
 			if err != nil {
 				return err
 			}
@@ -412,7 +454,7 @@ func CmdSelfSigned(c *cert.Config, m *cert.Manager, args ...string) error {
 		}
 
 		fmt.Println("installing self-signed certificate for " + domain + " ...")
-		err := m.InstallSelfSigned(domain, time.Hour)
+		err := m.InstallSelfSigned(domain, now, now.Add(time.Hour))
 		if err != nil {
 			return err
 		}

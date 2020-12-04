@@ -70,7 +70,7 @@ type Info struct {
 }
 
 // GetCertInfo returns information about a certificate managed by m.
-func (m *Manager) GetCertInfo(domain string) (*Info, error) {
+func (m *Manager) GetCertInfo(domain string, now time.Time) (*Info, error) {
 	certFileName, err := m.config.GetCertFileName(domain)
 	if err != nil {
 		return nil, err
@@ -79,7 +79,7 @@ func (m *Manager) GetCertInfo(domain string) (*Info, error) {
 	if err != nil && !os.IsNotExist(err) {
 		return nil, err
 	}
-	info, err := m.checkCertDER(time.Now(), chainDER, domain)
+	info, err := m.checkCertDER(now, chainDER, domain)
 	if err != nil {
 		return nil, err
 	}
@@ -88,9 +88,7 @@ func (m *Manager) GetCertInfo(domain string) (*Info, error) {
 }
 
 // InstallSelfSigned installs a self-signed dummy certificate for a domain.
-func (m *Manager) InstallSelfSigned(domain string, expiry time.Duration) error {
-	now := time.Now()
-
+func (m *Manager) InstallSelfSigned(domain string, notBefore, notAfter time.Time) error {
 	privKey, err := m.getKey(domain)
 	if err != nil {
 		return err
@@ -99,8 +97,8 @@ func (m *Manager) InstallSelfSigned(domain string, expiry time.Duration) error {
 	tmpl := &x509.Certificate{
 		Subject:      pkix.Name{CommonName: domain},
 		SerialNumber: newSerialNum(),
-		NotBefore:    now,
-		NotAfter:     now.Add(expiry),
+		NotBefore:    notBefore,
+		NotAfter:     notAfter,
 		DNSNames:     []string{domain},
 		KeyUsage: x509.KeyUsageKeyEncipherment |
 			x509.KeyUsageDigitalSignature,

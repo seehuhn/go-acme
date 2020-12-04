@@ -21,6 +21,7 @@ import (
 	"net/http"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"seehuhn.de/go/acme/internal/acmetest"
 )
@@ -65,7 +66,7 @@ func TestManager(t *testing.T) {
 		t.Error(err)
 	}
 
-	info, err := m.GetCertInfo(domain)
+	info, err := m.GetCertInfo(domain, time.Now())
 	if err != nil {
 		t.Error(err)
 	} else if !info.IsValid {
