@@ -1,3 +1,10 @@
+- Let's encrypt recomments to renew certificates when they have a third of
+  their total lifetime left.
+- increase the timeout value to avoid the following error:
+    root@seehuhn:~/acme# ~voss/servercert -D=false renew -f imap.seehuhn.de
+    renewing imap.seehuhn.de
+    context deadline exceeded
+
 - keep track of how much of the rate limit allowance we have used
 - in AcceptTOS, keep track of which terms have been agreed to
 
