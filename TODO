@@ -1,5 +1,6 @@
 - Let's encrypt recomments to renew certificates when they have a third of
   their total lifetime left.
+  https://letsencrypt.org/docs/integration-guide/
 - increase the timeout value to avoid the following error:
     root@seehuhn:~/acme# ~voss/servercert -D=false renew -f imap.seehuhn.de
     renewing imap.seehuhn.de
