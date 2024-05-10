@@ -26,7 +26,6 @@ import (
 	"path/filepath"
 	"sort"
 	"strconv"
-	"strings"
 	"time"
 
 	"gopkg.in/yaml.v3"
@@ -35,11 +34,10 @@ import (
 )
 
 var cmds = map[string]func(*cert.Config, *cert.Manager, ...string) error{
-	"check-cert":       CmdCheckCert,
-	"check-config":     CmdCheckConfig,
-	"renew":            CmdRenew,
-	"self-signed":      CmdSelfSigned,
-	"show-server-cert": CmdShowServerCert,
+	"check-cert":   CmdCheckCert,
+	"check-config": CmdCheckConfig,
+	"renew":        CmdRenew,
+	"self-signed":  CmdSelfSigned,
 }
 
 var configFileName = flag.String("c", "config.yml",
@@ -457,57 +455,6 @@ func CmdSelfSigned(c *cert.Config, m *cert.Manager, args ...string) error {
 		err := m.InstallSelfSigned(domain, now, now.Add(time.Hour))
 		if err != nil {
 			return err
-		}
-	}
-	return nil
-}
-
-// CmdShowServerCert downloads a certificate from a server and displays
-// the data contained.
-func CmdShowServerCert(c *cert.Config, m *cert.Manager, args ...string) error {
-	ff := flag.NewFlagSet("show-server-cert", flag.ExitOnError)
-	ff.Parse(args)
-
-	domains := ff.Args()
-	for _, domain := range domains {
-		port := 443
-		if strings.Contains(domain, ":") {
-			parts := strings.SplitN(domain, ":", 2)
-			domain = parts[0]
-			p64, err := strconv.ParseUint(parts[1], 10, 16)
-			if err != nil {
-				return err
-			}
-			port = int(p64)
-		}
-
-		chain, err := getServerCertChain(domain, strconv.Itoa(port))
-		if err != nil {
-			return err
-		} else if len(chain) == 0 {
-			fmt.Print("cannot download server certificate for " + domain + "\n\n")
-			continue
-		}
-
-		info, err := m.CheckCert(time.Now(), chain, domain)
-		if err != nil {
-			return err
-		}
-		if !info.IsValid {
-			fmt.Println("\nINVALID CERTIFICATE:\n" + info.Message)
-			continue
-		}
-
-		for i, chain := range info.Chains {
-			if i > 0 {
-				fmt.Println()
-				fmt.Println()
-				fmt.Println("*** alternative certificate chain:")
-			}
-			for j, cert := range chain {
-				fmt.Println()
-				printCert(cert, fmt.Sprintf("%-4d", j+1), "    ")
-			}
 		}
 	}
 	return nil
