@@ -22,7 +22,6 @@ import (
 	"encoding/base64"
 	"errors"
 	"io"
-	"io/ioutil"
 	"net/http"
 	"os"
 	"path"
@@ -282,7 +281,7 @@ func (c *Config) TestChallenge(domain string) error {
 			Err:     err,
 		}
 	}
-	body, err := ioutil.ReadAll(resp.Body)
+	body, err := io.ReadAll(resp.Body)
 	if err != nil {
 		return &DomainError{
 			Domain:  domain,

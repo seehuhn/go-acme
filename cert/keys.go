@@ -23,7 +23,6 @@ import (
 	"crypto/rand"
 	"crypto/x509"
 	"encoding/pem"
-	"io/ioutil"
 	"math/big"
 	"os"
 	"strings"
@@ -53,7 +52,7 @@ func loadOrCreatePrivateKey(fname string) (crypto.Signer, error) {
 
 func loadPrivateKey(fname string) (crypto.Signer, error) {
 	// TODO(voss): return an error if the key is world-readable
-	data, err := ioutil.ReadFile(fname)
+	data, err := os.ReadFile(fname)
 	if err != nil {
 		return nil, err
 	}
@@ -65,7 +64,7 @@ func loadPrivateKey(fname string) (crypto.Signer, error) {
 }
 
 func loadCertChain(fname string) ([][]byte, error) {
-	data, err := ioutil.ReadFile(fname)
+	data, err := os.ReadFile(fname)
 	if err != nil {
 		return nil, err
 	}

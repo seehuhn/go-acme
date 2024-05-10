@@ -30,7 +30,6 @@ import (
 	"encoding/pem"
 	"fmt"
 	"io"
-	"io/ioutil"
 	"log"
 	"math/big"
 	"net/http"
@@ -569,7 +568,7 @@ func (ca *CAServer) verifyHTTPChallenge(domain string) error {
 		return fmt.Errorf("cannot read challenge response: status %d",
 			resp.StatusCode)
 	}
-	body, err := ioutil.ReadAll(resp.Body)
+	body, err := io.ReadAll(resp.Body)
 	if err != nil {
 		return err
 	}

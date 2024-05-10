@@ -34,7 +34,7 @@ import (
 
 const accountKeyName = "account.key"
 
-const acmeTimeout = 10 * time.Second
+const acmeTimeout = 30 * time.Second
 
 // Manager holds all state required to generate and/or renew certificates via
 // an ACME server.
